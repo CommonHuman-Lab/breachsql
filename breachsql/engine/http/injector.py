@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (c) 2026 CommonHuman-Lab
 """
-StingXSS — engine/injector.py
+BreachSQL — engine/injector.py
 HTTP engine: session management, request helpers, parameter injection.
 
-All HTTP communication in StingXSS goes through this module so that
+All HTTP communication in BreachSQL goes through this module so that
 proxy, timeout, headers, cookies, and request counting are centralised.
 """
 

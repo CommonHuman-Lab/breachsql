@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (c) 2026 CommonHuman-Lab
 """
-StingXSS — engine/crawler.py
+BreachSQL — engine/crawler.py
 Multi-threaded BFS web crawler.
 
 Discovers links and HTML forms within a target origin.

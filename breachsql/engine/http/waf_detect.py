@@ -3,10 +3,6 @@
 """
 BreachSQL — engine/waf_detect.py
 WAF fingerprinting and evasion strategy selection.
-
-Extends the stingxss WAF detector with SQLi-specific probe payloads and
-SQL-aware evasion strategies (comment injection, whitespace substitution,
-case mixing on SQL keywords).
 """
 
 from __future__ import annotations
