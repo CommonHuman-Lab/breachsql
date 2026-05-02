@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 CommonHuman-Lab
+from __future__ import annotations
+
+from breachsql._cli.colour import BOLD, CYAN, DIM, GREEN, RED, YELLOW
+
+
+def print_summary(result) -> None:
+    print()
+    print(BOLD("=" * 60))
+    print(BOLD("  BreachSQL — Scan Summary"))
+    print(BOLD("=" * 60))
+    print(f"  Target        : {result.target}")
+    print(f"  Duration      : {result.duration_s}s")
+    print(f"  Requests sent : {result.requests_sent}")
+    print(f"  URLs crawled  : {result.crawled_urls}")
+    print(f"  Params tested : {result.params_tested}")
+    print(f"  WAF detected  : {result.waf_detected or 'None'}")
+    print(f"  Evasion used  : {result.evasion_applied or 'None'}")
+    print(f"  DBMS detected : {result.dbms_detected or 'Unknown'}")
+    print()
+
+    if result.total_findings == 0:
+        print(DIM("  No findings."))
+    else:
+        print(GREEN(f"  Total findings: {result.total_findings}"))
+        print()
+        i = 1
+
+        for f in result.error_based:
+            print(f"  {i}. {RED('[ERROR-BASED SQLi]')} Confirmed")
+            print(f"     Param   : {f.parameter}")
+            print(f"     URL     : {f.url}")
+            print(f"     Method  : {f.method}")
+            print(f"     DBMS    : {f.dbms}")
+            print(f"     Payload : {f.payload}")
+            if f.evidence:
+                print(f"     Evidence: {DIM(f.evidence[:120])}")
+            print()
+            i += 1
+
+        for f in result.boolean_based:
+            status = GREEN("[CONFIRMED]") if f.confirmed else YELLOW("[LIKELY]")
+            print(f"  {i}. {status} {YELLOW('Boolean-based SQLi')}")
+            print(f"     Param      : {f.parameter}")
+            print(f"     URL        : {f.url}")
+            print(f"     Method     : {f.method}")
+            print(f"     True payload  : {f.payload_true}")
+            print(f"     False payload : {f.payload_false}")
+            print(f"     Diff score : {f.diff_score:.2f}")
+            print()
+            i += 1
+
+        for f in result.time_based:
+            print(f"  {i}. {CYAN('[TIME-BASED BLIND SQLi]')}")
+            print(f"     Param     : {f.parameter}")
+            print(f"     URL       : {f.url}")
+            print(f"     Method    : {f.method}")
+            print(f"     DBMS hint : {f.dbms}")
+            print(f"     Payload   : {f.payload}")
+            print(f"     Delay     : {f.observed_delay:.2f}s  (threshold: {f.threshold}s)")
+            print()
+            i += 1
+
+        for f in result.union_based:
+            print(f"  {i}. {RED('[UNION-BASED SQLi]')} Confirmed")
+            print(f"     Param    : {f.parameter}")
+            print(f"     URL      : {f.url}")
+            print(f"     Method   : {f.method}")
+            print(f"     Columns  : {f.column_count}")
+            print(f"     Payload  : {f.payload}")
+            if f.extracted:
+                print(f"     Extracted: {DIM(f.extracted[:120])}")
+            print()
+            i += 1
+
+        for f in result.oob:
+            print(f"  {i}. {CYAN('[OOB SQLi]')} Payload injected")
+            print(f"     Param    : {f.parameter}")
+            print(f"     URL      : {f.url}")
+            print(f"     Callback : {f.callback_url}")
+            print(f"     Payload  : {f.payload}")
+            print()
+            i += 1
+
+    if result.errors:
+        print(RED("  Errors:"))
+        for e in result.errors:
+            print(f"    - {e}")
+
+    print(BOLD("=" * 60))

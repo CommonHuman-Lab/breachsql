@@ -1,0 +1,125 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 CommonHuman-Lab
+"""
+BreachSQL — engine/_scanner/pipeline.py
+Scan pipeline: WAF → passive → surface building → active → time-blind → OOB.
+"""
+
+from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Dict, List
+
+from ..log import get_logger
+from .. import crawler as crawler_mod
+from ..http import waf_detect
+from ..http.injector import Injector, parse_post_data
+from ..reporter import ScanResult
+from .options import ScanOptions
+from .passive import fetch_seed, run_passive_checks
+from .active import scan_param
+from .blind import run_time_based, run_oob
+
+logger = get_logger("breachsql.pipeline")
+
+
+def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> None:
+
+    # 1. WAF detection
+    logger.info("Probing for WAF on %s", url)
+    params = injector.get_params(url)
+    first_param = params[0] if params else None
+    waf_result = waf_detect.detect(injector, url, first_param)
+
+    if waf_result.detected:
+        result.waf_detected    = waf_result.name
+        result.evasion_applied = waf_result.evasions[0] if waf_result.evasions else None
+        logger.warning("WAF detected: %s (confidence: %s)", waf_result.name, waf_result.confidence)
+    else:
+        logger.debug("No WAF detected")
+
+    evasions: List[str] = waf_result.evasions if waf_result.evasions else ["none"]
+
+    # 2. Passive checks
+    seed_resp = fetch_seed(injector, url)
+    run_passive_checks(url, seed_resp, injector, result)
+
+    # 3. Build injectable surfaces
+    surfaces: List[Dict[str, Any]] = []
+    for param in injector.get_params(url):
+        surfaces.append({"url": url, "method": "GET", "params": {param: ""}, "single_param": param})
+
+    if opts.data:
+        post_params = parse_post_data(opts.data)
+        for param in post_params:
+            surfaces.append({
+                "url": url, "method": "POST",
+                "params": post_params, "single_param": param,
+            })
+
+    if opts.crawl:
+        logger.info("Crawling %s (max_pages=%s, depth=%s)", url, opts.max_pages, opts.max_depth)
+        crawl_result = crawler_mod.crawl(
+            start_url=url, injector=injector,
+            max_pages=opts.max_pages, max_depth=opts.max_depth, threads=opts.threads,
+        )
+        result.crawled_urls = len(crawl_result.visited_urls)
+        logger.info(
+            "Crawled %d URLs, found %d forms",
+            result.crawled_urls, len(crawl_result.form_targets),
+        )
+        for page_url, page_params in crawl_result.url_params:
+            for param in page_params:
+                surfaces.append({
+                    "url": page_url, "method": "GET",
+                    "params": {param: ""}, "single_param": param,
+                })
+        for form in crawl_result.form_targets:
+            for param in form.params:
+                surfaces.append({
+                    "url": form.action, "method": form.method,
+                    "params": {**form.base_data, **form.params}, "single_param": param,
+                })
+    else:
+        if seed_resp is not None:
+            # Parse any forms on the seed page
+            pass  # crawler not enabled; surfaces already built from URL params
+
+    logger.info("%d injectable surfaces identified", len(surfaces))
+    result.params_tested = len(surfaces)
+
+    # 4. Active: error-based + boolean + union (threaded)
+    if opts.use_error or opts.use_boolean or opts.use_union:
+        with ThreadPoolExecutor(max_workers=opts.threads) as pool:
+            futs = [
+                pool.submit(scan_param, s, evasions, opts, injector, result)
+                for s in surfaces
+            ]
+            for f in as_completed(futs):
+                try:
+                    f.result()
+                except Exception as exc:
+                    result.append_error(str(exc))
+
+    # 5. Time-based blind (sequential — timing sensitive, threading skews results)
+    if opts.use_time:
+        logger.info("Running time-based blind detection (%d surfaces)", len(surfaces))
+        for surface in surfaces:
+            try:
+                run_time_based(surface, evasions, opts, injector, result)
+            except Exception as exc:
+                result.append_error(str(exc))
+
+    # 6. OOB injection (threaded — fire and forget)
+    if opts.use_oob:
+        logger.info("Injecting OOB payloads (callback: %s)", opts.oob_callback)
+        with ThreadPoolExecutor(max_workers=opts.threads) as pool:
+            futs = [
+                pool.submit(run_oob, s, evasions, opts, injector, result)
+                for s in surfaces
+            ]
+            for f in as_completed(futs):
+                try:
+                    f.result()
+                except Exception as exc:
+                    result.append_error(str(exc))
