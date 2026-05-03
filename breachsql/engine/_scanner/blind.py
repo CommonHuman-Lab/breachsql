@@ -115,6 +115,8 @@ def run_oob(
                     injector.post(url, data={**params, param: payload})
             elif method.upper() == "PATH":
                 injector.inject_path(url, path_index, payload)
+            elif method.upper() == "COOKIE":
+                injector.inject_cookie(url, param, payload)
             else:
                 injector.inject_get(url, param, payload)
         except Exception as exc:
@@ -169,6 +171,8 @@ def _timed_fetch(
                     injector.post(url, data=injected)
             elif method.upper() == "PATH":
                 injector.inject_path(url, path_index, injected_value)
+            elif method.upper() == "COOKIE":
+                injector.inject_cookie(url, param, injected_value)
             else:
                 injector.inject_get(url, param, injected_value)
             injector.get(second_url)
@@ -179,6 +183,8 @@ def _timed_fetch(
                 injector.post(url, data=injected)
         elif method.upper() == "PATH":
             injector.inject_path(url, path_index, injected_value)
+        elif method.upper() == "COOKIE":
+            injector.inject_cookie(url, param, injected_value)
         else:
             injector.inject_get(url, param, injected_value)
         return time.monotonic() - t0

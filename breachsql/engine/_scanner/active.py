@@ -427,6 +427,8 @@ def _fetch(
                     injector.post(url, data=injected)
             elif method.upper() == "PATH":
                 injector.inject_path(url, path_index, injected[param])
+            elif method.upper() == "COOKIE":
+                injector.inject_cookie(url, param, injected[param])
             else:
                 injector.inject_get(url, param, injected[param])
             resp = injector.get(second_url)
@@ -437,6 +439,8 @@ def _fetch(
                 resp = injector.post(url, data=injected)
         elif method.upper() == "PATH":
             resp = injector.inject_path(url, path_index, injected[param])
+        elif method.upper() == "COOKIE":
+            resp = injector.inject_cookie(url, param, injected[param])
         else:
             # For GET, rebuild the URL with the injected param value
             resp = injector.inject_get(url, param, injected[param])

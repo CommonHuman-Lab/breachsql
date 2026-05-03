@@ -111,6 +111,17 @@ def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> 
             "path_index": _pidx,
         })
 
+    # Cookie parameter surfaces — inject into specified cookie names.
+    if opts.cookie_params:
+        _cookie_jar = injector._session.cookies.get_dict() if hasattr(injector, '_session') else {}
+        for _cname in opts.cookie_params:
+            _cval = _cookie_jar.get(_cname, "")
+            surfaces.append({
+                "url": url, "method": "COOKIE",
+                "params": {_cname: _cval},
+                "single_param": _cname,
+            })
+
     if opts.crawl:
         logger.info("Crawling %s (max_pages=%s, depth=%s)", url, opts.max_pages, opts.max_depth)
         crawl_result = crawler_mod.crawl(

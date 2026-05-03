@@ -145,6 +145,10 @@ class Injector:
     target   = up.urlunparse(parsed._replace(path=new_path))
     return self.get(target)
 
+  def inject_cookie(self, url: str, cookie_name: str, payload: str) -> Response:
+    """Inject `payload` as the value of `cookie_name`, overriding for this request."""
+    return self.get(url, cookies={cookie_name: payload})
+
   def inject_header(self, url: str, header_name: str, payload: str) -> Response:
     """Inject `payload` as the value of a custom HTTP request header."""
     return self.get(url, headers={header_name: payload})

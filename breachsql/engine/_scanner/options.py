@@ -36,6 +36,7 @@ class ScanOptions:
         second_url:       str               = "",       # read response from different URL
         max_union_cols:   int               = 20,       # max columns to probe in UNION detection
         path_params:      list[str] | None  = None,     # path segment names to inject
+        cookie_params:    list[str] | None  = None,     # cookie names to inject into
     ) -> None:
         # Shared
         self.crawl            = crawl
@@ -70,6 +71,7 @@ class ScanOptions:
         self.second_url       = second_url.strip()  # if set, read responses from here
         self.max_union_cols   = max(1, min(max_union_cols, 100))
         self.path_params      = path_params or []
+        self.cookie_params    = cookie_params or []
 
     # Convenience: check which techniques are enabled
     @property
