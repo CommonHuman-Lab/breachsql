@@ -78,11 +78,23 @@ def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> 
         # (e.g. the user knows segment 3 is "id") — use index order as fallback
         for _name in opts.path_params:
             if _name not in _path_param_indices:
-                # Try to find a numeric-looking segment to inject into
+                # Prefer numeric-looking segments (REST id values) over word segments
+                def _is_numeric(s: str) -> bool:
+                    return s.lstrip("-").isdigit()
+                # First pass: numeric segments
                 for _i, _part in enumerate(_path_parts):
-                    if _i not in _path_param_indices.values() and _part and not _part.startswith("{") and not _part.startswith(":"):
+                    if (_i not in _path_param_indices.values() and _part
+                            and not _part.startswith("{") and not _part.startswith(":")
+                            and _is_numeric(_part)):
                         _path_param_indices[_name] = _i
                         break
+                # Second pass: any non-empty non-placeholder segment
+                if _name not in _path_param_indices:
+                    for _i, _part in enumerate(_path_parts):
+                        if (_i not in _path_param_indices.values() and _part
+                                and not _part.startswith("{") and not _part.startswith(":")):
+                            _path_param_indices[_name] = _i
+                            break
     else:
         # Auto-detect :name and {name} patterns
         for _i, _part in enumerate(_path_parts):
