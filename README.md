@@ -6,7 +6,7 @@
 [![Security](https://img.shields.io/badge/Security-SQL%20Injection%20Scanner-red.svg)](https://github.com/CommonHuman-Lab/breachsql)
 [![WAF Evasion](https://img.shields.io/badge/WAF%20Evasion-built--in-orange.svg)](https://github.com/CommonHuman-Lab/breachsql)
 
-**Context-aware SQL injection scanner** — error-based, boolean-blind, time-blind, UNION, and stacked injection detection across MySQL, PostgreSQL, and SQLite. WAF detection and evasion built in. No Burp license. Just findings.
+**Context-aware SQL injection scanner** — error-based, boolean-blind, time-blind, UNION, and stacked injection detection across MySQL, MariaDB, PostgreSQL, SQLite, MSSQL, and Oracle. WAF detection and evasion built in. No Burp license. Just findings.
 
 ```bash
 pip install breachsql
@@ -19,7 +19,7 @@ pip install breachsql
 ## Why BreachSQL?
 
 - **Multi-technique** — error-based, boolean-blind, time-blind, UNION extraction, stacked queries, all in one pass
-- **Multi-backend** — MySQL, PostgreSQL, SQLite detection and technique selection
+  - **Multi-backend** — MySQL, MariaDB, PostgreSQL, SQLite, MSSQL, and Oracle detection and technique selection
 - **Context-aware** — numeric, string, quoted, parenthesised, and header/cookie injection contexts
 - **WAF-aware** — detects common WAFs and applies evasion transforms automatically
 - **Every injection surface** — query params, POST form, JSON body, path parameters, cookies, headers
@@ -93,14 +93,15 @@ for f in result.error_based:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--dbms` | auto | Target backend: `mysql`, `postgres`, `sqlite` |
+| `--dbms` | auto | Target backend: `mysql`, `mariadb`, `postgres`, `sqlite`, `mssql`, `oracle` |
 | `-t` / `--technique` | `EBTUS` | Techniques to run (any combo of E B T U S) |
-| `--level` | `1` | Payload depth: 1 = safe, 2 = extended |
+| `--level` | `1` | Payload depth: 1 = standard, 2 = extended, 3 = extended + data extraction |
 | `--risk` | `1` | Payload aggression: 1 = low, 2 = medium, 3 = high |
 | `--time-threshold` | `5` | Seconds to consider a time-blind hit (T technique) |
 | `-d` / `--data` | — | POST body — form-encoded or JSON |
 | `--cookies` | — | Cookie string: `name=val; name2=val2` |
 | `--cookie-params` | — | Which cookie names to inject |
+| `--header-params` | — | HTTP header names to inject (e.g. `X-Forwarded-For`) |
 | `--path-params` | — | Path segment names to treat as injection points |
 | `--second-url` | — | Read URL for two-step injection |
 | `--timeout` | `10` | Per-request timeout in seconds |
@@ -120,7 +121,7 @@ The **BreachSQL Fire Range** is a deliberately vulnerable Flask + MySQL + Postgr
 pytest tests/test_firerange.py -v
 ```
 
-45 tests — all 37 challenges, 4 sanity checks, 2 flag submission checks, 2 technique variants.
+63 tests — all injectable challenges plus sanity, flag submission, and technique variant checks.
 
 → [Fire Range README](https://github.com/CommonHuman-Lab/OctoRig/tree/main/labs/firerange)
 
