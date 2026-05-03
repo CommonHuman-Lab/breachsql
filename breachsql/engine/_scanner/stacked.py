@@ -66,34 +66,41 @@ def run_stacked(
     if baseline is None:
         return
 
-    for raw_payload in payloads:
-        payload = apply_evasion(raw_payload, evasion)
-        resp = _fetch(injector, url, method, params, param, payload,
-                      second_url=second_url, json_body=json_body,
-                      path_index=path_index)
-        if resp is None:
-            continue
+    _prev_count = len(result.stacked) if hasattr(result, "stacked") else 0
 
-        # Check for DB error first — a stacked syntax error would mean
-        # the DB does *not* support stacked queries (or the syntax is wrong).
-        err_dbms, _ = _detect_db_error(resp)
-        if err_dbms:
-            continue
+    for evasion in (evasions if evasions else [EVASION_NONE]):
+        for raw_payload in payloads:
+            payload = apply_evasion(raw_payload, evasion)
+            resp = _fetch(injector, url, method, params, param, payload,
+                          second_url=second_url, json_body=json_body,
+                          path_index=path_index)
+            if resp is None:
+                continue
 
-        score = _diff_score(baseline, resp)
-        if score >= _STACKED_DIFF_THRESHOLD:
-            logger.finding(
-                "Stacked query SQLi: %s param=%s score=%.2f payload=%s",
-                url, param, score, payload,
-            )
-            result.append_stacked(StackedFinding(
-                url=url,
-                parameter=param,
-                method=method,
-                payload=payload,
-                dbms=dbms,
-                evidence=resp[:200],
-            ))
-            if result.dbms_detected is None and dbms not in ("auto", "unknown", ""):
-                result.dbms_detected = dbms
-            return  # one finding per param
+            # Check for DB error first — a stacked syntax error would mean
+            # the DB does *not* support stacked queries (or the syntax is wrong).
+            err_dbms, _ = _detect_db_error(resp)
+            if err_dbms:
+                continue
+
+            score = _diff_score(baseline, resp)
+            if score >= _STACKED_DIFF_THRESHOLD:
+                logger.finding(
+                    "Stacked query SQLi: %s param=%s score=%.2f payload=%s",
+                    url, param, score, payload,
+                )
+                result.append_stacked(StackedFinding(
+                    url=url,
+                    parameter=param,
+                    method=method,
+                    payload=payload,
+                    dbms=dbms,
+                    evidence=resp[:200],
+                ))
+                if result.dbms_detected is None and dbms not in ("auto", "unknown", ""):
+                    result.dbms_detected = dbms
+                return  # one finding per param
+
+        _cur_count = len(result.stacked) if hasattr(result, "stacked") else 0
+        if _cur_count > _prev_count:
+            break

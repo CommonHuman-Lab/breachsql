@@ -23,6 +23,7 @@ class FindingType(str, Enum):
     UNION_BASED  = "union_based_sqli"
     OOB          = "oob_sqli"
     STACKED      = "stacked_sqli"
+    EXTRACTION   = "extraction"
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +98,17 @@ class StackedFinding:
     evidence:  str = ""  # first 200 chars of the diverged response
 
 
+@dataclass
+class ExtractionFinding:
+    """Data extracted via blind char-by-char extraction (boolean or time mode)."""
+    url:       str
+    parameter: str
+    method:    str
+    expr:      str    # SQL expression that was extracted
+    value:     str    # extracted string value
+    mode:      str    # "boolean" or "time"
+
+
 # ---------------------------------------------------------------------------
 # Finding type → list attribute mapping
 # ---------------------------------------------------------------------------
@@ -108,6 +120,7 @@ _FINDING_LISTS: List[tuple[str, FindingType]] = [
     ("union_based",   FindingType.UNION_BASED),
     ("oob",           FindingType.OOB),
     ("stacked",       FindingType.STACKED),
+    ("extracted",     FindingType.EXTRACTION),
 ]
 
 
@@ -142,6 +155,7 @@ class ScanResult:
     union_based:   List[UnionFinding]      = field(default_factory=list)
     oob:           List[OOBFinding]        = field(default_factory=list)
     stacked:       List[StackedFinding]    = field(default_factory=list)
+    extracted:     List[ExtractionFinding] = field(default_factory=list)
 
     log:    List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
@@ -160,6 +174,7 @@ class ScanResult:
     def append_union(self, f)         -> None: self._append("union_based", f)
     def append_oob(self, f)           -> None: self._append("oob", f)
     def append_stacked(self, f)       -> None: self._append("stacked", f)
+    def append_extraction(self, f)    -> None: self._append("extracted", f)
     def append_error(self, msg: str)  -> None: self._append("errors", msg)
     def append_log(self, msg: str)    -> None: self._append("log", msg)
 

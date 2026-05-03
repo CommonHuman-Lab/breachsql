@@ -122,6 +122,15 @@ def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> 
                 "single_param": _cname,
             })
 
+    # HTTP header injection surfaces — inject into specified header names.
+    if opts.header_params:
+        for _hname in opts.header_params:
+            surfaces.append({
+                "url": url, "method": "HEADER",
+                "params": {_hname: ""},
+                "single_param": _hname,
+            })
+
     if opts.crawl:
         logger.info("Crawling %s (max_pages=%s, depth=%s)", url, opts.max_pages, opts.max_depth)
         crawl_result = crawler_mod.crawl(

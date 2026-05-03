@@ -158,8 +158,8 @@ class Injector:
   ) -> tuple[bool, Response]:
     """Probe whether `marker` injected via `header_name` is reflected."""
     resp = self.inject_header(url, header_name, marker)
-    from ..analysis.parser import is_reflected
-    return is_reflected(resp.text, marker), resp
+    reflected = marker in resp.text
+    return reflected, resp
 
   def probe_reflection(self, url: str, param: str, marker: str,
                        method: str = "GET",

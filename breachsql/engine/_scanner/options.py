@@ -37,6 +37,7 @@ class ScanOptions:
         max_union_cols:   int               = 20,       # max columns to probe in UNION detection
         path_params:      list[str] | None  = None,     # path segment names to inject
         cookie_params:    list[str] | None  = None,     # cookie names to inject into
+        header_params:    list[str] | None  = None,     # HTTP header names to inject into
     ) -> None:
         # Shared
         self.crawl            = crawl
@@ -72,6 +73,7 @@ class ScanOptions:
         self.max_union_cols   = max(1, min(max_union_cols, 100))
         self.path_params      = path_params or []
         self.cookie_params    = cookie_params or []
+        self.header_params    = header_params or []
 
     # Convenience: check which techniques are enabled
     @property
