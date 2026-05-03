@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from breachsql.engine._scanner.options import ScanOptions
@@ -25,6 +27,14 @@ class TestScanOptionsDefaults:
     def test_default_time_threshold(self):
         opts = ScanOptions()
         assert opts.time_threshold == 4
+
+    def test_default_second_url(self):
+        opts = ScanOptions()
+        assert opts.second_url == ""
+
+    def test_default_max_union_cols(self):
+        opts = ScanOptions()
+        assert opts.max_union_cols == 20
 
 
 class TestScanOptionsClamping:
@@ -64,6 +74,14 @@ class TestScanOptionsClamping:
         opts = ScanOptions(delay=-1.0)
         assert opts.delay == 0.0
 
+    def test_max_union_cols_clamped_low(self):
+        opts = ScanOptions(max_union_cols=0)
+        assert opts.max_union_cols == 1
+
+    def test_max_union_cols_clamped_high(self):
+        opts = ScanOptions(max_union_cols=999)
+        assert opts.max_union_cols == 100
+
 
 class TestTechniqueProperties:
     def test_all_enabled(self):
@@ -93,3 +111,43 @@ class TestTechniqueProperties:
         assert opts.use_error is True
         assert opts.use_boolean is True
         assert opts.use_time is True
+
+    def test_invalid_technique_chars_warn_and_strip(self):
+        """Unknown technique letters should produce a UserWarning and be stripped."""
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            opts = ScanOptions(technique="EXZ")
+        assert len(w) == 1
+        assert issubclass(w[0].category, UserWarning)
+        assert "X" in str(w[0].message) or "Z" in str(w[0].message)
+        # Only valid letters survive
+        assert opts.technique == "E"
+        assert opts.use_boolean is False
+
+    def test_entirely_invalid_technique_results_in_empty(self):
+        """Entirely invalid technique should produce empty technique string."""
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            opts = ScanOptions(technique="XYZ")
+        assert opts.technique == ""
+        assert opts.use_error is False
+
+
+class TestDbmsNormalisation:
+    def test_dbms_lowercased(self):
+        opts = ScanOptions(dbms="MySQL")
+        assert opts.dbms == "mysql"
+
+    def test_dbms_stripped(self):
+        opts = ScanOptions(dbms="  MYSQL  ")
+        assert opts.dbms == "mysql"
+
+
+class TestSecondUrl:
+    def test_second_url_stored(self):
+        opts = ScanOptions(second_url="https://x.com/result")
+        assert opts.second_url == "https://x.com/result"
+
+    def test_second_url_stripped(self):
+        opts = ScanOptions(second_url="  https://x.com/result  ")
+        assert opts.second_url == "https://x.com/result"

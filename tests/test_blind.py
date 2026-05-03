@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 import time
 
 import pytest
@@ -13,6 +13,7 @@ from breachsql.engine._scanner.blind import (
     run_time_based,
     run_oob,
     _infer_dbms_from_payload,
+    _measure_baseline,
 )
 from breachsql.engine._scanner.options import ScanOptions
 from breachsql.engine.reporter import ScanResult
@@ -55,6 +56,26 @@ class TestInferDbms:
     def test_unknown(self):
         assert _infer_dbms_from_payload("some other payload") == "unknown"
 
+    def test_pg_sleep_not_confused_with_sleep(self):
+        """pg_sleep( must match postgres before sleep( matches mysql."""
+        assert _infer_dbms_from_payload("pg_sleep(4)") == "postgres"
+
+
+class TestMeasureBaseline:
+    def test_returns_min_of_two_samples(self):
+        """Baseline time should be the minimum of two clean request times."""
+        injector = _mock_injector_with_delay(0.0)
+        t = _measure_baseline(injector, "https://x.com/?id=1", "GET", {"id": "1"}, "id")
+        assert t is not None
+        assert t >= 0.0
+
+    def test_returns_none_if_all_fail(self):
+        """If all baseline requests fail, returns None."""
+        injector = MagicMock()
+        injector.inject_get.side_effect = Exception("network error")
+        t = _measure_baseline(injector, "https://x.com/?id=1", "GET", {"id": "1"}, "id")
+        assert t is None
+
 
 class TestTestTimeBased:
     def test_no_finding_fast_response(self):
@@ -64,6 +85,49 @@ class TestTestTimeBased:
         result = ScanResult(target="https://x.com/")
         run_time_based(_surface(), ["none"], opts, injector, result)
         assert len(result.time_based) == 0
+
+    def test_slow_response_produces_finding(self):
+        """Responses exceeding the threshold should produce a TimeFinding."""
+        # Mock _timed_fetch to return a long delay without actually sleeping
+        with patch("breachsql.engine._scanner.blind._timed_fetch") as mock_tf:
+            # baseline = 0.01s, payload = 5.0s, confirmation = 5.0s
+            mock_tf.side_effect = [0.01, 0.01, 5.0, 5.0]
+
+            opts = ScanOptions(technique="T", time_threshold=4, dbms="mysql")
+            result = ScanResult(target="https://x.com/")
+            run_time_based(_surface(), ["none"], opts, result=result,
+                           injector=MagicMock())
+
+            assert len(result.time_based) == 1
+            assert result.time_based[0].observed_delay >= 4.0
+
+    def test_dbms_propagated_from_payload(self):
+        """Detected DBMS should be stored in result.dbms_detected."""
+        with patch("breachsql.engine._scanner.blind._timed_fetch") as mock_tf:
+            mock_tf.side_effect = [0.01, 0.01, 5.0, 5.0]
+
+            opts = ScanOptions(technique="T", time_threshold=4, dbms="mysql")
+            result = ScanResult(target="https://x.com/")
+            run_time_based(_surface(), ["none"], opts, result=result,
+                           injector=MagicMock())
+
+            assert result.dbms_detected == "mysql"
+
+    def test_second_url_forwarded(self):
+        """second_url in opts must be forwarded to _timed_fetch calls."""
+        with patch("breachsql.engine._scanner.blind._timed_fetch") as mock_tf:
+            mock_tf.return_value = 0.0  # fast, no finding — we just check the calls
+
+            opts = ScanOptions(technique="T", time_threshold=4, dbms="mysql",
+                               second_url="https://x.com/result")
+            result = ScanResult(target="https://x.com/")
+            run_time_based(_surface(), ["none"], opts, result=result,
+                           injector=MagicMock())
+
+            # Every _timed_fetch call should have second_url set
+            for c in mock_tf.call_args_list:
+                kwargs = c[1]
+                assert kwargs.get("second_url") == "https://x.com/result"
 
     def test_oob_not_called_without_callback(self):
         """OOB should silently exit if no callback is configured."""

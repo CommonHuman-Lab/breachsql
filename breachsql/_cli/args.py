@@ -83,12 +83,13 @@ def interactive_prompts() -> argparse.Namespace:
 
     _section("SQLi options")
     dbms       = _prompt("  Target DBMS", default="auto",
-                         hint="mysql | mssql | postgres | sqlite | auto")
+                         hint="mysql | mariadb | mssql | postgres | sqlite | oracle | auto")
     technique  = _prompt("  Techniques", default="EBTUO",
                          hint="E=error B=bool T=time U=union O=oob  (e.g. EBT)")
     oob        = _prompt("  OOB callback URL", hint="https://your.interactsh.io/x  (blank to skip)")
     time_thr   = _prompt("  Time threshold", default="4", hint="seconds to flag time-based hit")
     risk_str   = _prompt("  Risk level", default="1", hint="1=safe 2=moderate 3=aggressive")
+    second_url = _prompt("  Second URL", hint="read SQLi response from this URL (blank to skip)")
 
     _section("Scan options")
     level_str   = _prompt("  Scan level",  default="1", hint="1=fast  2=thorough  3=deep")
@@ -128,6 +129,7 @@ def interactive_prompts() -> argparse.Namespace:
         oob=oob,
         time_threshold=_safe_int(time_thr, 4, 1, 30),
         risk=_safe_int(risk_str, 1, 1, 3),
+        second_url=second_url,
     )
 
 
@@ -170,7 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- SQLi-specific ---
     p.add_argument("--dbms",      default="auto",
-                   choices=["auto", "mysql", "mssql", "postgres", "sqlite"],
+                   choices=["auto", "mysql", "mariadb", "mssql", "postgres", "sqlite", "oracle"],
                    help="Target DBMS hint (default: auto-detect)")
     p.add_argument("--technique", default="EBTUO", metavar="TECHNIQUES",
                    help="Techniques to use: E=error B=bool T=time U=union O=oob (default: EBTUO)")
@@ -180,6 +182,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Seconds delta to flag time-based SQLi (default 4)")
     p.add_argument("--risk",      type=int, default=1, choices=[1, 2, 3],
                    help="Risk level: 1=safe 2=moderate 3=aggressive (default 1)")
+    p.add_argument("--second-url", default="", dest="second_url", metavar="URL",
+                   help="Read SQLi response from this URL after injecting into target "
+                        "(e.g. DVWA high: inject to session-input.php, read from sqli/)")
 
     # --- Output ---
     p.add_argument("-o", "--output", default="", metavar="FILE",

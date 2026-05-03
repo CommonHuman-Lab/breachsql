@@ -62,6 +62,7 @@ def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> 
         crawl_result = crawler_mod.crawl(
             start_url=url, injector=injector,
             max_pages=opts.max_pages, max_depth=opts.max_depth, threads=opts.threads,
+            exclude_patterns=opts.exclude_patterns or [],
         )
         result.crawled_urls = len(crawl_result.visited_urls)
         logger.info(

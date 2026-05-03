@@ -99,6 +99,7 @@ def main() -> None:
         oob_callback=args.oob,
         time_threshold=args.time_threshold,
         risk=args.risk,
+        second_url=getattr(args, "second_url", ""),
     )
 
     all_results = []

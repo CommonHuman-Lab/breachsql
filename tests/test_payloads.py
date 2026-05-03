@@ -157,13 +157,15 @@ class TestApplyEvasion:
 class TestUnionProbes:
     def test_order_by_count(self):
         probes = order_by_probes(max_cols=10)
-        assert len(probes) == 10
+        # Four variants per column count: string+dash, string+hash, numeric+dash, numeric+hash
+        assert len(probes) == 40
         assert "ORDER BY 1" in probes[0]
-        assert "ORDER BY 10" in probes[9]
+        assert "ORDER BY 10" in probes[-1]
 
     def test_union_null_probes_count(self):
         probes = union_null_probes(col_count=3, marker="TESTMARKER")
-        assert len(probes) == 3
+        # 3 positions × 2 variants (str literal, CAST) × 4 comment/context combos = 24
+        assert len(probes) == 24
 
     def test_union_null_probes_contain_marker(self):
         probes = union_null_probes(col_count=2, marker="MARK")
@@ -173,7 +175,9 @@ class TestUnionProbes:
         probes = union_null_probes(col_count=4, marker="M")
         for p in probes:
             # Each probe should have 4 columns total (NULL or marker)
-            cols_part = p.split("UNION SELECT")[1].split("--")[0]
+            cols_part = p.split("UNION SELECT")[1]
+            # Strip comment suffix (-- - or #)
+            cols_part = cols_part.split("-- -")[0].split("#")[0]
             assert cols_part.count(",") == 3  # 4 columns = 3 commas
 
 

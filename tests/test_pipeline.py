@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 
 import pytest
 
@@ -87,6 +87,22 @@ class TestPipelineSurfaces:
 
         assert result.params_tested == 0
 
+    def test_post_data_adds_surfaces(self, mock_waf):
+        """POST data params should add injectable surfaces."""
+        waf_result = MagicMock(detected=False, evasions=["none"])
+        mock_waf.detect.return_value = waf_result
+
+        injector = _mock_injector(params=[])  # no GET params
+        opts = ScanOptions(technique="E", data="username=admin&password=test")
+        result = ScanResult(target="https://x.com/login")
+
+        with patch("breachsql.engine._scanner.pipeline.scan_param") as mock_scan:
+            run("https://x.com/login", opts, injector, result)
+            # Two POST params = two scan_param calls
+            assert mock_scan.call_count == 2
+
+        assert result.params_tested == 2
+
 
 @patch("breachsql.engine._scanner.pipeline.waf_detect")
 @patch("breachsql.engine._scanner.pipeline.scan_param")
@@ -116,3 +132,24 @@ class TestPipelineTechniqueGating:
         with patch("breachsql.engine._scanner.pipeline.run_oob") as mock_oob:
             run("https://x.com/?q=1", opts, injector, result)
             mock_oob.assert_not_called()
+
+
+@patch("breachsql.engine._scanner.pipeline.waf_detect")
+class TestPipelineSecondUrl:
+    def test_second_url_forwarded_via_opts(self, mock_waf):
+        """opts.second_url must reach scan_param (which reads it from opts)."""
+        waf_result = MagicMock(detected=False, evasions=["none"])
+        mock_waf.detect.return_value = waf_result
+
+        injector = _mock_injector(params=["id"])
+        opts = ScanOptions(technique="E", second_url="https://x.com/result",
+                           data="id=1")
+        result = ScanResult(target="https://x.com/inject")
+
+        with patch("breachsql.engine._scanner.pipeline.scan_param") as mock_scan:
+            run("https://x.com/inject", opts, injector, result)
+            # opts (containing second_url) must be passed to scan_param
+            for c in mock_scan.call_args_list:
+                _, kwargs = c
+                passed_opts = c[0][2] if len(c[0]) >= 3 else kwargs.get("opts")
+                assert passed_opts.second_url == "https://x.com/result"

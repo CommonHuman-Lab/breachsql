@@ -49,17 +49,27 @@ class CrawlResult:
 # ---------------------------------------------------------------------------
 
 def crawl(
-  start_url:   str,
-  injector:    Injector,
-  max_pages:   int = 50,
-  max_depth:   int = 3,
-  threads:     int = 5,
-  same_origin: bool = True,
+  start_url:       str,
+  injector:        Injector,
+  max_pages:       int = 50,
+  max_depth:       int = 3,
+  threads:         int = 5,
+  same_origin:     bool = True,
+  exclude_patterns: List[str] | None = None,
 ) -> CrawlResult:
   """
   BFS crawl starting from `start_url`.
   Returns a CrawlResult with all discovered pages, forms, and URL params.
+
+  *exclude_patterns* is a list of regex strings; any URL matching one of
+  them is silently skipped.
   """
+  import re as _re
+  _compiled_excludes = [_re.compile(p) for p in (exclude_patterns or [])]
+
+  def _is_excluded(url: str) -> bool:
+      return any(p.search(url) for p in _compiled_excludes)
+
   result   = CrawlResult()
   visited:  Set[str] = set()
   queue:    deque    = deque()   # (url, depth)
@@ -75,6 +85,8 @@ def crawl(
         if norm in visited:
           continue
         if same_origin and not injector.same_origin(norm, start_url):
+          continue
+        if _is_excluded(norm):
           continue
         visited.add(norm)
         batch.append((norm, depth))
@@ -108,7 +120,7 @@ def crawl(
         if depth < max_depth:
           for link in links:
             norm = _normalise(link)
-            if norm not in visited:
+            if norm not in visited and not _is_excluded(norm):
               queue.append((norm, depth + 1))
 
   return result
