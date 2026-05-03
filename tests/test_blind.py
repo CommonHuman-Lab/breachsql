@@ -76,6 +76,26 @@ class TestMeasureBaseline:
         t = _measure_baseline(injector, "https://x.com/?id=1", "GET", {"id": "1"}, "id")
         assert t is None
 
+    def test_baseline_does_not_append_literal_one(self):
+        """Baseline must send the original param value unchanged, not append '1'."""
+        from breachsql.engine._scanner.blind import _timed_fetch_clean
+        seen_values: list = []
+
+        injector = MagicMock()
+
+        def _capture(url, param, value):
+            seen_values.append(value)
+            r = MagicMock()
+            r.text = "<html>OK</html>"
+            r.status_code = 200
+            return r
+
+        injector.inject_get.side_effect = _capture
+        _measure_baseline(injector, "https://x.com/?id=1", "GET", {"id": "1"}, "id")
+        # The original param value for GET is extracted from the URL querystring — "1"
+        # It must NOT be "11" (original "1" + appended "1")
+        assert all(v == "1" for v in seen_values), f"Unexpected values injected: {seen_values}"
+
 
 class TestTestTimeBased:
     def test_no_finding_fast_response(self):
@@ -169,7 +189,19 @@ class TestTestOob:
 
         assert result.oob[0].parameter == "user_id"
 
-    def test_oob_sqlite_no_payloads(self):
+    def test_oob_finding_confirmed_is_false(self):
+        """OOB findings must always have confirmed=False (callback not verified in-band)."""
+        injector = MagicMock()
+        r = MagicMock()
+        r.text = "<html>OK</html>"
+        injector.inject_get.return_value = r
+
+        opts = ScanOptions(technique="O", oob_callback="http://cb.example.com", dbms="mssql")
+        result = ScanResult(target="https://x.com/")
+        run_oob(_surface(), ["none"], opts, injector, result)
+
+        assert len(result.oob) == 1
+        assert result.oob[0].confirmed is False
         """SQLite has no OOB capability — no finding should be appended."""
         injector = MagicMock()
         opts = ScanOptions(technique="O", oob_callback="http://cb.io", dbms="sqlite")

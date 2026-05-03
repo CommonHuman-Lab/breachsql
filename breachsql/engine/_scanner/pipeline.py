@@ -156,9 +156,7 @@ def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> 
                     "params": {**form.base_data, **form.params}, "single_param": param,
                 })
     else:
-        if seed_resp is not None:
-            # Parse any forms on the seed page
-            pass  # crawler not enabled; surfaces already built from URL params
+        pass  # crawler not enabled; surfaces already built from URL params and POST data
 
     logger.info("%d injectable surfaces identified", len(surfaces))
     result.params_tested = len(surfaces)

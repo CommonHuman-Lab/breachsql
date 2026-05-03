@@ -98,12 +98,11 @@ def get_db_contents_payloads(dbms: str, target: str = "tables") -> List[str]:
 
 STACKED_PAYLOADS: dict[str, List[str]] = {
     "mysql": [
-        "'; SELECT SLEEP(0)-- -",
-        "'; SELECT 1-- -",
+        "'; SELECT SLEEP(1)-- -",
         "'; SELECT VERSION()-- -",
     ],
     "mariadb": [
-        "'; SELECT SLEEP(0)-- -",
+        "'; SELECT SLEEP(1)-- -",
         "'; SELECT VERSION()-- -",
     ],
     "mssql": [

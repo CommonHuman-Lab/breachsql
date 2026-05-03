@@ -135,7 +135,7 @@ def run_oob(
     dbms    = result.dbms_detected or opts.dbms
 
     payloads = get_oob_payloads(dbms, opts.oob_callback)
-    _prev_count = len(result.oob) if hasattr(result, "oob") else 0
+    _prev_count = len(result.oob)
 
     for evasion in (evasions if evasions else [EVASION_NONE]):
         for raw_payload in payloads:
@@ -167,7 +167,7 @@ def run_oob(
             ))
             return  # one OOB injection per param
 
-        _cur_count = len(result.oob) if hasattr(result, "oob") else 0
+        _cur_count = len(result.oob)
         if _cur_count > _prev_count:
             break
 
@@ -244,14 +244,68 @@ def _measure_baseline(
     json_body: bool = False,
     path_index: int = 0,
 ) -> Optional[float]:
-    """Return the minimum of two clean request times."""
+    """Return the minimum of two clean request times (original param value, no injection)."""
     times = []
     for _ in range(2):
-        t = _timed_fetch(injector, url, method, params, param, "1",
-                         second_url=second_url, json_body=json_body, path_index=path_index)
+        t = _timed_fetch_clean(injector, url, method, params, param,
+                               second_url=second_url, json_body=json_body, path_index=path_index)
         if t is not None:
             times.append(t)
     return min(times) if times else None
+
+
+def _timed_fetch_clean(
+    injector: Injector,
+    url: str,
+    method: str,
+    params: Dict[str, str],
+    param: str,
+    second_url: str = "",
+    json_body: bool = False,
+    path_index: int = 0,
+) -> Optional[float]:
+    """Send the request with the *original* param value (no injection) and return elapsed seconds."""
+    import urllib.parse as _up
+
+    if method.upper() == "GET":
+        qs = _up.parse_qs(_up.urlparse(url).query, keep_blank_values=True)
+        original = qs.get(param, [""])[0]
+    else:
+        original = params.get(param, "")
+
+    t0 = time.monotonic()
+    try:
+        if second_url:
+            if method.upper() == "POST":
+                if json_body:
+                    injector.post(url, json_body=params)
+                else:
+                    injector.post(url, data=params)
+            elif method.upper() == "PATH":
+                injector.inject_path(url, path_index, original)
+            elif method.upper() == "COOKIE":
+                injector.inject_cookie(url, param, original)
+            elif method.upper() == "HEADER":
+                injector.inject_header(url, param, original)
+            else:
+                injector.inject_get(url, param, original)
+            injector.get(second_url)
+        elif method.upper() == "POST":
+            if json_body:
+                injector.post(url, json_body=params)
+            else:
+                injector.post(url, data=params)
+        elif method.upper() == "PATH":
+            injector.inject_path(url, path_index, original)
+        elif method.upper() == "COOKIE":
+            injector.inject_cookie(url, param, original)
+        elif method.upper() == "HEADER":
+            injector.inject_header(url, param, original)
+        else:
+            injector.inject_get(url, param, original)
+        return time.monotonic() - t0
+    except Exception:
+        return None
 
 
 def _infer_dbms_from_payload(payload: str) -> str:

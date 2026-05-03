@@ -111,3 +111,47 @@ class TestRunStacked:
 
         if result.stacked:
             assert result.dbms_detected == "postgres"
+
+    def test_timing_payload_detected_via_delay(self):
+        """A SLEEP-based stacked payload must be confirmed via timing, not content diff."""
+        from unittest.mock import patch
+
+        with patch("breachsql.engine._scanner.stacked._timed_fetch") as mock_tf:
+            # Both confirmation requests exceed the threshold
+            mock_tf.side_effect = [5.0, 5.0]
+
+            opts = ScanOptions(technique="S", dbms="mysql", time_threshold=4)
+            result = ScanResult(target="https://x.com/")
+            injector = MagicMock()
+            r = MagicMock()
+            r.text = "<html>OK</html>"
+            injector.inject_get.return_value = r
+
+            # Patch payloads to return only a SLEEP payload
+            with patch("breachsql.engine._scanner.stacked.get_stacked_payloads",
+                       return_value=["'; SELECT SLEEP(1)-- -"]):
+                run_stacked(_surface(), ["none"], opts, injector, result)
+
+        assert len(result.stacked) == 1
+        assert result.stacked[0].parameter == "id"
+
+    def test_timing_payload_not_confirmed_if_second_fast(self):
+        """If the confirmation request is fast, the timing finding must be rejected."""
+        from unittest.mock import patch
+
+        with patch("breachsql.engine._scanner.stacked._timed_fetch") as mock_tf:
+            # First request slow, second (confirmation) fast
+            mock_tf.side_effect = [5.0, 0.1]
+
+            opts = ScanOptions(technique="S", dbms="mysql", time_threshold=4)
+            result = ScanResult(target="https://x.com/")
+            injector = MagicMock()
+            r = MagicMock()
+            r.text = "<html>OK</html>"
+            injector.inject_get.return_value = r
+
+            with patch("breachsql.engine._scanner.stacked.get_stacked_payloads",
+                       return_value=["'; SELECT SLEEP(1)-- -"]):
+                run_stacked(_surface(), ["none"], opts, injector, result)
+
+        assert len(result.stacked) == 0

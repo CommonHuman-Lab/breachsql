@@ -2,11 +2,14 @@
 # Copyright (c) 2026 CommonHuman-Lab
 import sys
 
-_USE_COLOUR = sys.stdout.isatty()
+
+def _use_colour() -> bool:
+    """Evaluate at output time so stdout redirections are respected."""
+    return sys.stdout.isatty()
 
 
 def _c(code: str, text: str) -> str:
-    if not _USE_COLOUR:
+    if not _use_colour():
         return text
     return f"\033[{code}m{text}\033[0m"
 

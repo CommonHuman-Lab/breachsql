@@ -115,3 +115,52 @@ class TestExtractValue:
             )
 
         assert any("SUBSTR(" in p for p in seen_payloads)
+
+
+class TestTimeBlindPayloads:
+    """Verify per-DBMS time-blind extraction payload syntax."""
+
+    def _collect_time_payloads(self, dbms: str) -> list:
+        """Run extract_value in time mode and collect all _timed_fetch payloads."""
+        seen = []
+
+        def _timed(injector, url, method, params, param, value,
+                   second_url="", json_body=False, path_index=0):
+            seen.append(value)
+            return 0.0  # always fast → extraction terminates quickly
+
+        with patch("breachsql.engine._scanner.extract._timed_fetch", side_effect=_timed):
+            opts = ScanOptions(dbms=dbms, time_threshold=4)
+            extract_value(
+                expr="VERSION()",
+                surface=_surface(),
+                evasions=["none"],
+                opts=opts,
+                injector=MagicMock(),
+                baseline="",
+                mode="time",
+            )
+        return seen
+
+    def test_mysql_uses_if_sleep(self):
+        payloads = self._collect_time_payloads("mysql")
+        assert any("IF(" in p and "SLEEP(" in p for p in payloads)
+
+    def test_postgres_uses_pg_sleep(self):
+        payloads = self._collect_time_payloads("postgres")
+        assert any("pg_sleep(" in p for p in payloads)
+
+    def test_sqlite_uses_randomblob(self):
+        payloads = self._collect_time_payloads("sqlite")
+        assert any("randomblob(" in p.lower() or "WITH RECURSIVE" in p for p in payloads)
+
+    def test_mssql_uses_stacked_waitfor(self):
+        """MSSQL time-blind must use stacked IF ... WAITFOR DELAY, not a SELECT subquery."""
+        payloads = self._collect_time_payloads("mssql")
+        for p in payloads:
+            # Must be stacked (starts with ';') and use IF + WAITFOR
+            assert "SELECT WAITFOR" not in p, (
+                f"MSSQL payload must not use SELECT WAITFOR subquery: {p}"
+            )
+        assert any("WAITFOR DELAY" in p and p.startswith("'") and "IF " in p
+                   for p in payloads)

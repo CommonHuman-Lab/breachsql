@@ -112,6 +112,14 @@ class TestFindingAppend:
         r.append_oob(f)
         assert len(r.oob) == 1
 
+    def test_oob_finding_confirmed_defaults_false(self):
+        """OOBFinding.confirmed must default to False — fire-and-forget, unverified."""
+        f = OOBFinding(
+            url="https://x.com/", parameter="id", method="GET",
+            payload="oob_payload", callback_url="https://cb.io",
+        )
+        assert f.confirmed is False
+
     def test_total_findings_sums_all_lists(self):
         r = _make_result()
         r.append_error_based(ErrorBasedFinding("u", "p", "GET", "pl", "mysql"))

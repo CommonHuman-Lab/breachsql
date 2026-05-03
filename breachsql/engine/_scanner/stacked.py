@@ -28,6 +28,7 @@ from ..http.waf_detect import EVASION_NONE
 from .options import ScanOptions
 from .payloads import apply_evasion, get_stacked_payloads
 from .active import _fetch, _diff_score, _detect_db_error
+from .blind import _timed_fetch
 
 logger = get_logger("breachsql.stacked")
 
@@ -51,43 +52,68 @@ def run_stacked(
     path_index = surface.get("path_index", 0)
     second_url = getattr(opts, "second_url", "")
 
-    evasion = evasions[0] if evasions else EVASION_NONE
-    dbms    = result.dbms_detected or opts.dbms
+    dbms = result.dbms_detected or opts.dbms
 
     payloads = get_stacked_payloads(dbms, opts.risk)
     if not payloads:
         # Oracle (and unknown DBMS with no payloads) — skip
         return
 
-    # Baseline
+    # Baseline (used for content-diff payloads)
     baseline = _fetch(injector, url, method, params, param, None,
                       second_url=second_url, json_body=json_body,
                       path_index=path_index)
     if baseline is None:
         return
 
-    _prev_count = len(result.stacked) if hasattr(result, "stacked") else 0
+    _prev_count = len(result.stacked)
 
     for evasion in (evasions if evasions else [EVASION_NONE]):
         for raw_payload in payloads:
             payload = apply_evasion(raw_payload, evasion)
-            resp = _fetch(injector, url, method, params, param, payload,
-                          second_url=second_url, json_body=json_body,
-                          path_index=path_index)
-            if resp is None:
-                continue
 
-            # Check for DB error first — a stacked syntax error would mean
-            # the DB does *not* support stacked queries (or the syntax is wrong).
-            err_dbms, _ = _detect_db_error(resp)
-            if err_dbms:
-                continue
+            # Determine whether this payload relies on timing (SLEEP/WAITFOR)
+            # or content diff (data-returning stacked SELECT).
+            _is_timing = any(kw in raw_payload.lower() for kw in ("sleep(", "waitfor delay"))
 
-            score = _diff_score(baseline, resp)
-            if score >= _STACKED_DIFF_THRESHOLD:
+            confirmed = False
+            evidence  = ""
+
+            if _is_timing:
+                # Timing-based stacked detection: measure elapsed time
+                elapsed = _timed_fetch(
+                    injector, url, method, params, param, payload,
+                    second_url=second_url, json_body=json_body, path_index=path_index,
+                )
+                if elapsed is None or elapsed < opts.time_threshold:
+                    continue
+                # Confirm with a second request
+                elapsed2 = _timed_fetch(
+                    injector, url, method, params, param, payload,
+                    second_url=second_url, json_body=json_body, path_index=path_index,
+                )
+                if elapsed2 is None or elapsed2 < opts.time_threshold:
+                    continue
+                confirmed = True
+            else:
+                resp = _fetch(injector, url, method, params, param, payload,
+                              second_url=second_url, json_body=json_body,
+                              path_index=path_index)
+                if resp is None:
+                    continue
+                # A stacked syntax error means the DB does not support stacked queries
+                err_dbms, _ = _detect_db_error(resp)
+                if err_dbms:
+                    continue
+                score = _diff_score(baseline, resp)
+                if score >= _STACKED_DIFF_THRESHOLD:
+                    confirmed = True
+                    evidence  = resp[:200]
+
+            if confirmed:
                 logger.finding(
-                    "Stacked query SQLi: %s param=%s score=%.2f payload=%s",
-                    url, param, score, payload,
+                    "Stacked query SQLi: %s param=%s payload=%s",
+                    url, param, payload,
                 )
                 result.append_stacked(StackedFinding(
                     url=url,
@@ -95,12 +121,11 @@ def run_stacked(
                     method=method,
                     payload=payload,
                     dbms=dbms,
-                    evidence=resp[:200],
+                    evidence=evidence,
                 ))
                 if result.dbms_detected is None and dbms not in ("auto", "unknown", ""):
                     result.dbms_detected = dbms
                 return  # one finding per param
 
-        _cur_count = len(result.stacked) if hasattr(result, "stacked") else 0
-        if _cur_count > _prev_count:
+        if len(result.stacked) > _prev_count:
             break

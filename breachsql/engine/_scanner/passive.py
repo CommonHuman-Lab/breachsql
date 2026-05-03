@@ -74,9 +74,13 @@ def _check_interesting_headers(url: str, resp, result: ScanResult) -> None:
             # Auto-hint DBMS — only set when the header gives a strong signal
             if result.dbms_detected is None:
                 val_lower = val.lower()
+                hdr_lower = hdr.lower()
                 if "mysql" in val_lower or "mariadb" in val_lower:
                     result.dbms_detected = "mysql"
-                elif "asp" in val_lower or "iis" in val_lower or "mssql" in val_lower:
+                elif (
+                    "asp" in val_lower or "iis" in val_lower or "mssql" in val_lower
+                    or hdr_lower in ("x-aspnet-version", "x-aspnetmvc-version")
+                ):
                     result.dbms_detected = "mssql"
                 elif "postgres" in val_lower or "pgsql" in val_lower:
                     result.dbms_detected = "postgres"
