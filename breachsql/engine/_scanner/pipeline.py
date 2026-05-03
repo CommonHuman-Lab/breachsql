@@ -51,10 +51,12 @@ def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> 
 
     if opts.data:
         post_params = parse_post_data(opts.data)
+        _is_json_body = opts.data.strip().startswith("{")
         for param in post_params:
             surfaces.append({
                 "url": url, "method": "POST",
                 "params": post_params, "single_param": param,
+                "json_body": _is_json_body,
             })
 
     if opts.crawl:

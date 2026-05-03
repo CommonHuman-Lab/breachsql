@@ -52,28 +52,33 @@ def scan_param(
     Test a single injectable surface for SQLi.
     surface keys: url, method, params, single_param
     """
-    url    = surface["url"]
-    method = surface["method"]
-    params = surface["params"]
-    param  = surface["single_param"]
+    url       = surface["url"]
+    method    = surface["method"]
+    params    = surface["params"]
+    param     = surface["single_param"]
+    json_body = surface.get("json_body", False)
     second_url = getattr(opts, "second_url", "")
 
     # Fetch a clean baseline using the original param value (not empty string),
     # so the baseline represents normal application behaviour for a valid input.
-    baseline = _fetch(injector, url, method, params, param, None, second_url=second_url)
+    baseline = _fetch(injector, url, method, params, param, None,
+                      second_url=second_url, json_body=json_body)
     if baseline is None:
         return
 
     evasion = evasions[0] if evasions else EVASION_NONE
 
     if opts.use_error:
-        _test_error_based(url, method, params, param, evasion, opts, injector, result, second_url)
+        _test_error_based(url, method, params, param, evasion, opts, injector, result,
+                          second_url, json_body)
 
     if opts.use_boolean:
-        _test_boolean(url, method, params, param, baseline, evasion, opts, injector, result, second_url)
+        _test_boolean(url, method, params, param, baseline, evasion, opts, injector, result,
+                      second_url, json_body)
 
     if opts.use_union and opts.level >= 2:
-        _test_union(url, method, params, param, evasion, opts, injector, result, second_url)
+        _test_union(url, method, params, param, evasion, opts, injector, result,
+                    second_url, json_body)
 
 
 # ---------------------------------------------------------------------------
@@ -83,13 +88,14 @@ def scan_param(
 def _test_error_based(
     url: str, method: str, params: Dict[str, str], param: str,
     evasion: str, opts: ScanOptions, injector: Injector, result: ScanResult,
-    second_url: str = "",
+    second_url: str = "", json_body: bool = False,
 ) -> None:
     payloads = get_error_payloads(opts.dbms, opts.risk)
 
     for raw_payload in payloads:
         payload = apply_evasion(raw_payload, evasion)
-        resp = _fetch(injector, url, method, params, param, payload, second_url=second_url)
+        resp = _fetch(injector, url, method, params, param, payload,
+                      second_url=second_url, json_body=json_body)
         if resp is None:
             continue
 
@@ -121,7 +127,7 @@ def _test_error_based(
 def _test_boolean(
     url: str, method: str, params: Dict[str, str], param: str,
     baseline: str, evasion: str, opts: ScanOptions, injector: Injector, result: ScanResult,
-    second_url: str = "",
+    second_url: str = "", json_body: bool = False,
 ) -> None:
     pairs = get_boolean_pairs(opts.risk)
 
@@ -129,8 +135,10 @@ def _test_boolean(
         pt = apply_evasion(raw_true,  evasion)
         pf = apply_evasion(raw_false, evasion)
 
-        resp_true  = _fetch(injector, url, method, params, param, pt,  second_url=second_url)
-        resp_false = _fetch(injector, url, method, params, param, pf, second_url=second_url)
+        resp_true  = _fetch(injector, url, method, params, param, pt,
+                            second_url=second_url, json_body=json_body)
+        resp_false = _fetch(injector, url, method, params, param, pf,
+                            second_url=second_url, json_body=json_body)
         if resp_true is None or resp_false is None:
             continue
 
@@ -188,11 +196,12 @@ def _test_boolean(
 def _test_union(
     url: str, method: str, params: Dict[str, str], param: str,
     evasion: str, opts: ScanOptions, injector: Injector, result: ScanResult,
-    second_url: str = "",
+    second_url: str = "", json_body: bool = False,
 ) -> None:
     # Step 1: find column count via ORDER BY
     max_cols = getattr(opts, "max_union_cols", 20)
-    col_count = _find_column_count(url, method, params, param, evasion, injector, second_url, max_cols)
+    col_count = _find_column_count(url, method, params, param, evasion, injector,
+                                   second_url, max_cols, json_body)
     if col_count is None:
         return
 
@@ -202,20 +211,30 @@ def _test_union(
 
     for raw_payload in probes:
         payload = apply_evasion(raw_payload, evasion)
-        resp = _fetch(injector, url, method, params, param, payload, second_url=second_url)
+        resp = _fetch(injector, url, method, params, param, payload,
+                      second_url=second_url, json_body=json_body)
         if resp is None:
             continue
 
         if marker in resp:
-            # Guard against false positives where the marker appears only inside
-            # a DB error message (i.e. the escaped payload is reflected back in
-            # an SQL syntax error rather than being executed as a UNION result).
-            # A genuine UNION result will NOT simultaneously trigger a DB error.
+            # Guard 1: DB error reflection — the escaped payload in an SQL error.
             err_dbms, _ = _detect_db_error(resp)
             if err_dbms:
                 logger.debug(
                     "Union probe: marker found but response also has DB error — "
                     "likely error-reflected payload, skipping param=%s payload=%s",
+                    param, payload,
+                )
+                continue
+            # Guard 2: URL/path reflection — some apps echo the full URL or query
+            # string in a generic error page (e.g. "Unexpected path: ...MARKER...").
+            # In that case the marker is inside the injected value's URL encoding,
+            # not extracted by the UNION.  Detect by checking if the marker sits
+            # inside a <title> element or adjacent to the literal payload text.
+            if _is_path_reflected(resp, marker, payload):
+                logger.debug(
+                    "Union probe: marker found but appears to be URL/path reflection, "
+                    "skipping param=%s payload=%s",
                     param, payload,
                 )
                 continue
@@ -237,7 +256,7 @@ def _test_union(
 def _find_column_count(
     url: str, method: str, params: Dict[str, str], param: str,
     evasion: str, injector: Injector, second_url: str = "",
-    max_cols: int = 20,
+    max_cols: int = 20, json_body: bool = False,
 ) -> Optional[int]:
     """Determine column count using ORDER BY N probes.
 
@@ -254,44 +273,92 @@ def _find_column_count(
     last_ok: Optional[int] = None
 
     # Fetch a 'known-good' baseline to detect content disappearance
-    baseline_resp = _fetch(injector, url, method, params, param, None, second_url=second_url)
+    baseline_resp = _fetch(injector, url, method, params, param, None,
+                           second_url=second_url, json_body=json_body)
     baseline_words: set = set()
     if baseline_resp:
         # Use a small set of non-trivial tokens from the baseline as a presence check
         baseline_words = set(w for w in baseline_resp.split() if len(w) > 4)
 
-    def _response_looks_good(resp: str) -> bool:
-        """Return True if the response still contains baseline-like content."""
-        if not baseline_words:
+    # Per-prefix first-seen response — used as reference when the payload changes
+    # the injection context (e.g. ')) context returns empty results rather than
+    # echoing the baseline content, so the global baseline_words would misclassify
+    # a valid ORDER BY N as "bad").
+    prefix_baseline: Dict[str, str] = {}
+
+    def _get_prefix(payload: str) -> str:
+        """Extract the injection context prefix from a payload."""
+        m2 = _re.match(r"^(['\"]?\)*)", payload)
+        return m2.group(1) if m2 else ""
+
+    def _response_looks_good(resp: str, prefix: str) -> bool:
+        """Return True if the response still contains expected content.
+
+        Uses a per-prefix baseline when available so that contexts that change
+        the result set (e.g. ')) that breaks out of a LIKE clause returns empty
+        rows) are compared against their own first-seen response rather than the
+        uninjected baseline.
+        """
+        pb = prefix_baseline.get(prefix)
+        if pb is None:
+            # No baseline yet for this prefix — treat no-error response as valid
+            # and record it as the baseline for future comparison.
+            return True
+        # Compare against the first valid response seen for this prefix
+        ref_words = set(w for w in pb.split() if len(w) > 4)
+        if not ref_words:
             return True
         resp_words = set(w for w in resp.split() if len(w) > 4)
-        overlap = len(baseline_words & resp_words) / max(len(baseline_words), 1)
-        return overlap >= 0.90  # still ≥90% of baseline tokens present
+        overlap = len(ref_words & resp_words) / max(len(ref_words), 1)
+        return overlap >= 0.80
 
     seen_n: set = set()
+    # Per-prefix last_ok and confirmed-overflow tracking
+    prefix_last_ok: Dict[str, int] = {}
+    prefix_overflow: set = set()  # prefixes where we've seen an overflow (N too large)
 
     for raw_payload in probes:
         m = _re.search(r"ORDER BY (\d+)", raw_payload, _re.IGNORECASE)
         if not m:
             continue
         n = int(m.group(1))
+        prefix = _get_prefix(raw_payload)
+
+        # Skip prefixes that have already confirmed their column count
+        if prefix in prefix_overflow:
+            continue
 
         payload = apply_evasion(raw_payload, evasion)
-        resp = _fetch(injector, url, method, params, param, payload, second_url=second_url)
+        resp = _fetch(injector, url, method, params, param, payload,
+                      second_url=second_url, json_body=json_body)
         if resp is None:
             continue
 
         _, err_evidence = _detect_db_error(resp)
-        looks_ok = not err_evidence and _response_looks_good(resp)
+        looks_ok = not err_evidence and _response_looks_good(resp, prefix)
 
         if looks_ok:
-            last_ok = n
+            # Record the first good response for this prefix as its baseline
+            if prefix not in prefix_baseline:
+                prefix_baseline[prefix] = resp
+            prefix_last_ok[prefix] = n
+            last_ok = max(last_ok or 0, n) or None
             seen_n.add(n)
         else:
-            # N is too large — but only stop once we've confirmed last_ok
-            # (skip if we haven't seen any good response yet, might be unstable)
-            if last_ok is not None and n > last_ok and n not in seen_n:
-                return last_ok
+            p_last = prefix_last_ok.get(prefix)
+            if p_last is not None and n > p_last:
+                # This prefix has overflowed — record its column count
+                prefix_overflow.add(prefix)
+
+    # Return the column count from the prefix that gave the most columns
+    if prefix_overflow:
+        # Prefer the confirmed (overflowed) prefix with highest last_ok
+        best = max(
+            (prefix_last_ok[p] for p in prefix_overflow if p in prefix_last_ok),
+            default=None,
+        )
+        if best is not None:
+            return best
 
     return last_ok
 
@@ -308,6 +375,7 @@ def _fetch(
     param: str,
     value: Optional[str],
     second_url: str = "",
+    json_body: bool = False,
 ) -> Optional[str]:
     """
     Inject *value* into *param* and return response text, or None on error.
@@ -351,24 +419,35 @@ def _fetch(
         if second_url:
             # Two-step pattern: inject into url/POST, read result from second_url
             if method.upper() == "POST":
-                injector.post(url, data=injected)
+                if json_body:
+                    injector.post(url, json_body=injected)
+                else:
+                    injector.post(url, data=injected)
             else:
                 injector.inject_get(url, param, injected[param])
             resp = injector.get(second_url)
         elif method.upper() == "POST":
-            resp = injector.post(url, data=injected)
+            if json_body:
+                resp = injector.post(url, json_body=injected)
+            else:
+                resp = injector.post(url, data=injected)
         else:
             # For GET, rebuild the URL with the injected param value
             resp = injector.inject_get(url, param, injected[param])
 
         # Treat error HTTP status codes as non-injected responses to avoid
-        # false positives from WAF block pages (429, 403) or server errors (5xx).
+        # false positives from WAF block pages (429, 503) or server errors (5xx).
         if hasattr(resp, "status_code") and resp.status_code in (429, 503):
             logger.debug(
                 "HTTP %d on %s param=%s — treating as baseline noise",
                 resp.status_code, url, param,
             )
             return None
+
+        return resp.text
+    except Exception as exc:
+        logger.debug("Request error for %s param=%s: %s", url, param, exc)
+        return None
 
         return resp.text
     except Exception as exc:
@@ -505,3 +584,38 @@ def _extract_marker(body: str, marker: str) -> str:
     if idx == -1:
         return ""
     return body[max(0, idx - 10): idx + len(marker) + 190]
+
+
+def _is_path_reflected(body: str, marker: str, payload: str) -> bool:
+    """Return True if the marker appears to be a URL/path reflection rather than
+    actual UNION output.
+
+    This guards against apps that echo the full request URL (or query string) in
+    a generic error page (e.g. "Unexpected path: /search?q=...MARKER...").  In
+    such cases the marker is part of the injected value's URL-encoded form, not
+    a SQL result.
+
+    Detection heuristics:
+    1. The marker is inside a ``<title>`` tag.
+    2. The marker immediately follows URL-encoded SQL characters (``%27``, ``%29``,
+       ``+UNION+``) — indicating the full payload was echoed verbatim.
+    """
+    import urllib.parse as _up
+    body_lower = body.lower()
+
+    # Heuristic 1: marker inside <title>
+    title_start = body_lower.find("<title>")
+    title_end   = body_lower.find("</title>")
+    if title_start != -1 and title_end != -1:
+        title_text = body[title_start:title_end]
+        if marker.lower() in title_text.lower():
+            return True
+
+    # Heuristic 2: payload echoed verbatim (URL-encoded form)
+    # Only fire if the URL-encoded form actually differs from the plain marker
+    # (i.e. the marker itself contains characters that get percent-encoded).
+    encoded_marker = _up.quote(marker)
+    if encoded_marker != marker and encoded_marker in body:
+        return True
+
+    return False

@@ -157,15 +157,17 @@ class TestApplyEvasion:
 class TestUnionProbes:
     def test_order_by_count(self):
         probes = order_by_probes(max_cols=10)
-        # Four variants per column count: string+dash, string+hash, numeric+dash, numeric+hash
-        assert len(probes) == 40
+        # Eight variants per column count: string+dash, string+hash,
+        # single-paren+dash, single-paren+hash, double-paren+dash, double-paren+space-dash,
+        # numeric+dash, numeric+hash
+        assert len(probes) == 80
         assert "ORDER BY 1" in probes[0]
         assert "ORDER BY 10" in probes[-1]
 
     def test_union_null_probes_count(self):
         probes = union_null_probes(col_count=3, marker="TESTMARKER")
-        # 3 positions × 2 variants (str literal, CAST) × 4 comment/context combos = 24
-        assert len(probes) == 24
+        # 3 positions × 3 variants (str literal, CAST, int-padded) × 8 comment/context combos = 72
+        assert len(probes) == 72
 
     def test_union_null_probes_contain_marker(self):
         probes = union_null_probes(col_count=2, marker="MARK")

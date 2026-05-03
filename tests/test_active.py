@@ -484,8 +484,8 @@ class TestTestParam:
         # probe returns the marker *inside* an SQL error message.
         marker_holder: list[str] = []
 
-        import breachsql.engine._scanner.payloads as _pl
-        original_make_marker = _pl.make_marker
+        import breachsql.engine._scanner.active as _active
+        original_make_marker = _active.make_marker
 
         def _capture_marker():
             m = original_make_marker()
@@ -526,7 +526,7 @@ class TestTestParam:
             "single_param": "id",
         }
 
-        with patch.object(_pl, "make_marker", side_effect=_capture_marker):
+        with patch.object(_active, "make_marker", side_effect=_capture_marker):
             _test_union(
                 surface["url"], surface["method"], surface["params"],
                 surface["single_param"], "none", opts, injector, result,
@@ -534,3 +534,174 @@ class TestTestParam:
 
         # No union finding should be reported — the marker was only in an error
         assert len(result.union_based) == 0
+
+
+# ---------------------------------------------------------------------------
+# Paren-escape context detection tests
+# ---------------------------------------------------------------------------
+
+class TestParenEscapeContext:
+    """Verify that the scanner detects SQLi in LIKE ('%value%') style queries."""
+
+    def _make_paren_injector(self, marker: str):
+        """
+        Mock injector simulating: SELECT ... WHERE x LIKE ('%<value>%')
+        Error-based: ')) triggers a syntax error.
+        Union:       ')) UNION SELECT '<marker>',2,...-- returns the marker.
+        Boolean:     ')) AND '1'='1'-- vs ')) AND '1'='2'-- differ.
+        """
+        good = "<html><body>Product: Foo</body></html>"
+        error = "<html>SQLITE_ERROR: unrecognized token</html>"
+
+        def _inject_get(url, param, value):
+            r = MagicMock()
+            r.status_code = 200
+            v = str(value)
+            if "'))" in v and marker in v:
+                r.text = f"<html><body>{marker}</body></html>"
+            elif "'))" in v and ("AND '1'='1" in v or "AND 1=1" in v):
+                r.text = good  # true condition — same as baseline
+            elif "'))" in v and ("AND '1'='2" in v or "AND 1=2" in v):
+                r.text = "<html><body>No results</body></html>"
+            elif "'))" in v:
+                r.text = error
+            else:
+                r.text = good
+            return r
+
+        inj = MagicMock()
+        inj.inject_get.side_effect = _inject_get
+        inj.get_params.return_value = ["q"]
+        inj.request_count = 0
+        return inj
+
+    def test_error_based_paren_context(self):
+        from breachsql.engine._scanner.active import _test_error_based
+        inj = self._make_paren_injector("MARKER")
+        opts = ScanOptions(technique="E", dbms="sqlite")
+        result = ScanResult(target="https://x.com/")
+        _test_error_based(
+            "https://x.com/?q=foo", "GET", {"q": "foo"}, "q",
+            "none", opts, inj, result,
+        )
+        assert len(result.error_based) >= 1
+        assert result.error_based[0].dbms in ("sqlite", "generic")
+
+    def test_boolean_paren_context(self):
+        from breachsql.engine._scanner.active import _test_boolean
+        inj = self._make_paren_injector("MARKER")
+        opts = ScanOptions(technique="B")
+        result = ScanResult(target="https://x.com/")
+        baseline = "<html><body>Product: Foo</body></html>"
+        _test_boolean(
+            "https://x.com/?q=foo", "GET", {"q": "foo"}, "q",
+            baseline, "none", opts, inj, result,
+        )
+        assert len(result.boolean_based) >= 1
+
+    def test_union_paren_context(self):
+        from breachsql.engine._scanner.active import _test_union
+        import breachsql.engine._scanner.active as _active
+
+        marker_holder: list[str] = []
+        orig = _active.make_marker
+
+        def _cap():
+            m = orig()
+            marker_holder.append(m)
+            return m
+
+        good = "<html><body>Product: Foo</body></html>"
+        error = "<html>SQLITE_ERROR: unrecognized token</html>"
+
+        def _inject_get(url, param, value):
+            r = MagicMock()
+            r.status_code = 200
+            v = str(value)
+            if marker_holder and marker_holder[0] in v:
+                # UNION probe — return marker in body only for paren-escape variants
+                if "'))" in v:
+                    r.text = f"<html><body>{marker_holder[0]}</body></html>"
+                else:
+                    r.text = error  # non-paren contexts fail
+            elif "ORDER BY 1" in v and "ORDER BY 10" not in v and "ORDER BY 11" not in v:
+                r.text = good  # col 1 is valid
+            elif "ORDER BY" in v:
+                r.text = error  # col > 1 triggers error → col_count = 1
+            else:
+                r.text = good
+            return r
+
+        inj = MagicMock()
+        inj.inject_get.side_effect = _inject_get
+        opts = ScanOptions(technique="U", level=2, dbms="sqlite")
+        result = ScanResult(target="https://x.com/")
+
+        with patch.object(_active, "make_marker", side_effect=_cap):
+            _test_union(
+                "https://x.com/?q=foo", "GET", {"q": "foo"}, "q",
+                "none", opts, inj, result,
+            )
+
+        assert len(result.union_based) >= 1
+        assert "'))" in result.union_based[0].payload
+
+
+# ---------------------------------------------------------------------------
+# JSON POST body injection tests
+# ---------------------------------------------------------------------------
+
+class TestJsonPostBody:
+    """Verify that JSON POST surfaces use json_body=True and send correct Content-Type."""
+
+    def test_fetch_uses_json_body_flag(self):
+        """_fetch with json_body=True calls injector.post(url, json_body=...) not data=..."""
+        inj = MagicMock()
+        resp = MagicMock()
+        resp.text = "<html>OK</html>"
+        resp.status_code = 200
+        inj.post.return_value = resp
+
+        from breachsql.engine._scanner.active import _fetch
+        result = _fetch(
+            inj, "https://x.com/api/login", "POST",
+            {"email": "admin@x.com", "password": "pass"}, "email",
+            "' OR 1=1--", json_body=True,
+        )
+        # Should have been called with json_body kwarg, not data=
+        call_kwargs = inj.post.call_args
+        assert call_kwargs is not None
+        # json_body should be set
+        assert call_kwargs.kwargs.get("json_body") is not None or (
+            len(call_kwargs.args) >= 2 and call_kwargs.args[1] is None
+        ), "Expected json_body to be passed to injector.post"
+        # data= should NOT be set (or be None)
+        assert call_kwargs.kwargs.get("data") is None
+
+    def test_scan_param_json_surface(self):
+        """scan_param with json_body=True surface detects error-based SQLi via JSON POST."""
+        error_html = "<html>SQLITE_ERROR: near \"'\" syntax error</html>"
+        ok_html = "<html>OK logged in</html>"
+
+        inj = MagicMock()
+        def _post(url, data=None, json_body=None, **kw):
+            r = MagicMock()
+            r.status_code = 200
+            body = json_body or data or {}
+            val = str(body.get("email", ""))
+            r.text = error_html if "'" in val else ok_html
+            return r
+
+        inj.post.side_effect = _post
+
+        opts = ScanOptions(technique="E", dbms="sqlite")
+        result = ScanResult(target="https://x.com/")
+        surface = {
+            "url": "https://x.com/api/login",
+            "method": "POST",
+            "params": {"email": "test@x.com", "password": "pass"},
+            "single_param": "email",
+            "json_body": True,
+        }
+        scan_param(surface, ["none"], opts, inj, result)
+        assert len(result.error_based) >= 1

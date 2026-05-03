@@ -2,7 +2,27 @@
 # Copyright (c) 2026 CommonHuman-Lab
 from __future__ import annotations
 
+import urllib.parse as _up
+
 from breachsql._cli.colour import BOLD, CYAN, DIM, GREEN, RED, YELLOW
+
+
+def _proof_url(url: str, param: str, payload: str, original: str = "1") -> str:
+    """
+    Build a proof-of-concept URL by injecting *payload* into *param*.
+
+    The payload is appended to the original param value (matching how the
+    scanner injects it) so the link reproduces the exact request that
+    triggered the finding.  The result is percent-encoded so it is safe
+    to paste into a browser address bar or terminal.
+    """
+    parsed   = _up.urlparse(url)
+    qs       = _up.parse_qs(parsed.query, keep_blank_values=True)
+    orig_val = qs.get(param, [original])[0]
+    injected = orig_val + payload
+    qs[param] = [injected]
+    new_query = _up.urlencode(qs, doseq=True)
+    return _up.urlunparse(parsed._replace(query=new_query))
 
 
 def print_summary(result) -> None:
@@ -36,6 +56,8 @@ def print_summary(result) -> None:
             print(f"     Payload : {f.payload}")
             if f.evidence:
                 print(f"     Evidence: {DIM(f.evidence[:120])}")
+            if f.method.upper() == "GET":
+                print(f"     Proof   : {CYAN(_proof_url(f.url, f.parameter, f.payload))}")
             print()
             i += 1
 
@@ -48,6 +70,9 @@ def print_summary(result) -> None:
             print(f"     True payload  : {f.payload_true}")
             print(f"     False payload : {f.payload_false}")
             print(f"     Diff score : {f.diff_score:.2f}")
+            if f.method.upper() == "GET":
+                print(f"     Proof (true) : {CYAN(_proof_url(f.url, f.parameter, f.payload_true))}")
+                print(f"     Proof (false): {CYAN(_proof_url(f.url, f.parameter, f.payload_false))}")
             print()
             i += 1
 
@@ -59,6 +84,8 @@ def print_summary(result) -> None:
             print(f"     DBMS hint : {f.dbms}")
             print(f"     Payload   : {f.payload}")
             print(f"     Delay     : {f.observed_delay:.2f}s  (threshold: {f.threshold}s)")
+            if f.method.upper() == "GET":
+                print(f"     Proof   : {CYAN(_proof_url(f.url, f.parameter, f.payload))}")
             print()
             i += 1
 
@@ -71,6 +98,8 @@ def print_summary(result) -> None:
             print(f"     Payload  : {f.payload}")
             if f.extracted:
                 print(f"     Extracted: {DIM(f.extracted[:120])}")
+            if f.method.upper() == "GET":
+                print(f"     Proof   : {CYAN(_proof_url(f.url, f.parameter, f.payload))}")
             print()
             i += 1
 
@@ -80,6 +109,8 @@ def print_summary(result) -> None:
             print(f"     URL      : {f.url}")
             print(f"     Callback : {f.callback_url}")
             print(f"     Payload  : {f.payload}")
+            if f.method.upper() == "GET":
+                print(f"     Proof   : {CYAN(_proof_url(f.url, f.parameter, f.payload))}")
             print()
             i += 1
 
