@@ -119,77 +119,77 @@ def test_scoreboard_json(firerange):
 
 @pytest.mark.firerange
 def test_challenge_list_json(firerange):
-    """/api/challenges returns all 33 challenges (no flags exposed)."""
+    """/api/challenges returns all 37 challenges (no flags exposed)."""
     r = requests.get(f"{firerange}/api/challenges", timeout=5)
     assert r.status_code == 200
     data = r.json()
-    assert isinstance(data, list) and len(data) >= 33
+    assert isinstance(data, list) and len(data) >= 37
     first = data[0]
     assert "flag" not in first
     assert {"challenge_id", "tier", "title", "points"} <= first.keys()
 
 
 # ===========================================================================
-# M Y S Q L — Tier 1  (Beginner)
+# M Y S Q L — MY1  (Beginner)
 # ===========================================================================
 
 @pytest.mark.firerange
-def test_t1a_error_get_numeric(firerange):
-    """T1-A: Integer param, raw concat, error leaks SQL syntax."""
+def test_my1a_error_get_numeric(firerange):
+    """MY1-A: Integer param, raw concat, error leaks SQL syntax."""
     result = _scan(
-        f"{firerange}/challenges/t1/users?id=1",
+        f"{firerange}/challenges/my1/users?id=1",
         dbms="mysql", technique="E", risk=1,
     )
     assert result.total_findings > 0, _msg(result)
 
 
 @pytest.mark.firerange
-def test_t1a_clean_baseline(firerange):
-    """T1-A: Clean request returns expected row (id=1 → admin)."""
-    r = requests.get(f"{firerange}/challenges/t1/users?id=1", timeout=5)
+def test_my1a_clean_baseline(firerange):
+    """MY1-A: Clean request returns expected row (id=1 → admin)."""
+    r = requests.get(f"{firerange}/challenges/my1/users?id=1", timeout=5)
     assert r.status_code == 200
     assert r.json()[0]["username"] == "admin"
 
 
 @pytest.mark.firerange
-def test_t1b_union_secrets(firerange):
-    """T1-B: UNION extraction from t1_secrets (2-column)."""
+def test_my1b_union_secrets(firerange):
+    """MY1-B: UNION extraction from my1_secrets (2-column)."""
     result = _scan(
-        f"{firerange}/challenges/t1/secrets?id=1",
+        f"{firerange}/challenges/my1/secrets?id=1",
         dbms="mysql", technique="U", level=2, risk=1,
     )
     assert result.total_findings > 0, _msg(result)
 
 
 @pytest.mark.firerange
-def test_t1c_double_quote_error(firerange):
-    """T1-C: Double-quote context error injection."""
+def test_my1c_double_quote_error(firerange):
+    """MY1-C: Double-quote context error injection."""
     result = _scan(
-        f"{firerange}/challenges/t1/notes?author=admin",
+        f"{firerange}/challenges/my1/notes?author=admin",
         dbms="mysql", technique="E", risk=1,
     )
     assert result.total_findings > 0, _msg(result)
 
 
 # ===========================================================================
-# M Y S Q L — Tier 2  (Intermediate)
+# M Y S Q L — MY2  (Intermediate)
 # ===========================================================================
 
 @pytest.mark.firerange
-def test_t2a_boolean_blind(firerange):
-    """T2-A: String param boolean-blind (200 vs 404)."""
+def test_my2a_boolean_blind(firerange):
+    """MY2-A: String param boolean-blind (200 vs 404)."""
     result = _scan(
-        f"{firerange}/challenges/t2/lookup?name=admin",
+        f"{firerange}/challenges/my2/lookup?name=admin",
         dbms="mysql", technique="B", risk=1,
     )
     assert result.total_findings > 0, _msg(result)
 
 
 @pytest.mark.firerange
-def test_t2b_post_login_error(firerange):
-    """T2-B: POST login form, error-based (username field)."""
+def test_my2b_post_login_error(firerange):
+    """MY2-B: POST login form, error-based (username field)."""
     result = _scan(
-        f"{firerange}/challenges/t2/login",
+        f"{firerange}/challenges/my2/login",
         dbms="mysql", technique="E",
         data="username=admin&password=secret",
         risk=1,
@@ -198,10 +198,10 @@ def test_t2b_post_login_error(firerange):
 
 
 @pytest.mark.firerange
-def test_t2b_post_login_boolean(firerange):
-    """T2-B: POST login form, boolean-blind (password field)."""
+def test_my2b_post_login_boolean(firerange):
+    """MY2-B: POST login form, boolean-blind (password field)."""
     result = _scan(
-        f"{firerange}/challenges/t2/login",
+        f"{firerange}/challenges/my2/login",
         dbms="mysql", technique="B",
         data="username=admin&password=secret",
         risk=1,
@@ -210,36 +210,36 @@ def test_t2b_post_login_boolean(firerange):
 
 
 @pytest.mark.firerange
-def test_t2c_or_based_boolean(firerange):
-    """T2-C: OR-based boolean-blind (risk 2 required)."""
+def test_my2c_or_based_boolean(firerange):
+    """MY2-C: OR-based boolean-blind (risk 2 required)."""
     result = _scan(
-        f"{firerange}/challenges/t2/lookup?name=nobody",
+        f"{firerange}/challenges/my2/lookup?name=nobody",
         dbms="mysql", technique="B", risk=2,
     )
     assert result.total_findings > 0, _msg(result)
 
 
 @pytest.mark.firerange
-def test_t2d_second_step(firerange):
-    """T2-D: Two-step injection — inject in /search, read result at /inbox."""
+def test_my2d_second_step(firerange):
+    """MY2-D: Two-step injection — inject in /search, read result at /inbox."""
     result = _scan(
-        f"{firerange}/challenges/t2/search?user=admin",
+        f"{firerange}/challenges/my2/search?user=admin",
         dbms="mysql", technique="B",
-        second_url=f"{firerange}/challenges/t2/inbox",
+        second_url=f"{firerange}/challenges/my2/inbox",
         risk=1,
     )
     assert result.total_findings > 0, _msg(result)
 
 
 # ===========================================================================
-# M Y S Q L — Tier 3  (Advanced)
+# M Y S Q L — MY3  (Advanced)
 # ===========================================================================
 
 @pytest.mark.firerange
-def test_t3a_time_blind(firerange):
-    """T3-A: String param, MySQL SLEEP() time-blind."""
+def test_my3a_time_blind(firerange):
+    """MY3-A: String param, MySQL SLEEP() time-blind."""
     result = _scan(
-        f"{firerange}/challenges/t3/search?name=admin",
+        f"{firerange}/challenges/my2/search?name=admin",
         dbms="mysql", technique="T",
         time_threshold=3, risk=1,
     )
@@ -247,10 +247,10 @@ def test_t3a_time_blind(firerange):
 
 
 @pytest.mark.firerange
-def test_t3b_path_param(firerange):
-    """T3-B: Path-parameter injection (/challenges/t3/item/1)."""
+def test_my3b_path_param(firerange):
+    """MY3-B: Path-parameter injection (/challenges/my3/item/1)."""
     result = _scan(
-        f"{firerange}/challenges/t3/item/1",
+        f"{firerange}/challenges/my3/item/1",
         dbms="mysql", technique="E",
         path_params=["id"], risk=1,
     )
@@ -258,54 +258,54 @@ def test_t3b_path_param(firerange):
 
 
 @pytest.mark.firerange
-def test_t3c_union_3col(firerange):
-    """T3-C: 3-column UNION extraction."""
+def test_my3c_union_3col(firerange):
+    """MY3-C: 3-column UNION extraction."""
     result = _scan(
-        f"{firerange}/challenges/t3/products?id=1",
+        f"{firerange}/challenges/my3/products?id=1",
         dbms="mysql", technique="U", level=2, risk=1,
     )
     assert result.total_findings > 0, _msg(result)
 
 
 @pytest.mark.firerange
-def test_t3d_union_5col(firerange):
-    """T3-D: 5-column UNION extraction."""
+def test_my3d_union_5col(firerange):
+    """MY3-D: 5-column UNION extraction."""
     result = _scan(
-        f"{firerange}/challenges/t3/catalog?id=1",
+        f"{firerange}/challenges/my3/catalog?id=1",
         dbms="mysql", technique="U", level=2, risk=1,
     )
     assert result.total_findings > 0, _msg(result)
 
 
 @pytest.mark.firerange
-def test_t3e_paren_context(firerange):
-    """T3-E: Boolean-blind inside parenthesised WHERE clause."""
+def test_my3e_paren_context(firerange):
+    """MY3-E: Boolean-blind inside parenthesised WHERE clause."""
     result = _scan(
-        f"{firerange}/challenges/t3/account?username=jsmith",
+        f"{firerange}/challenges/my3/account?username=jsmith",
         dbms="mysql", technique="B", risk=1,
     )
     assert result.total_findings > 0, _msg(result)
 
 
 # ===========================================================================
-# M Y S Q L — Tier 4  (Expert)
+# M Y S Q L — MY4  (Expert)
 # ===========================================================================
 
 @pytest.mark.firerange
-def test_t4a_comment_filter_bypass(firerange):
-    """T4-A: Inline comment WAF bypass (-- and # stripped, need /**/)."""
+def test_my4a_comment_filter_bypass(firerange):
+    """MY4-A: Inline comment WAF bypass (-- and # stripped, need /**/)."""
     result = _scan(
-        f"{firerange}/challenges/t4/filtered?id=1",
+        f"{firerange}/challenges/my4/filtered?id=1",
         dbms="mysql", technique="E", risk=2,
     )
     assert result.total_findings > 0, _msg(result)
 
 
 @pytest.mark.firerange
-def test_t4b_json_body(firerange):
-    """T4-B: JSON-body POST injection."""
+def test_my4b_json_body(firerange):
+    """MY4-B: JSON-body POST injection."""
     result = _scan(
-        f"{firerange}/challenges/t4/api/user",
+        f"{firerange}/challenges/my4/api/user",
         dbms="mysql", technique="E",
         data='{"user_id": 1}',
         risk=1,
@@ -314,20 +314,20 @@ def test_t4b_json_body(firerange):
 
 
 @pytest.mark.firerange
-def test_t4c_stacked(firerange):
-    """T4-C: Stacked-injectable endpoint confirmed via error-based."""
+def test_my4c_stacked(firerange):
+    """MY4-C: Stacked-injectable endpoint confirmed via error-based."""
     result = _scan(
-        f"{firerange}/challenges/t4/stacked?id=1",
+        f"{firerange}/challenges/my4/stacked?id=1",
         dbms="mysql", technique="E", risk=1,
     )
     assert result.total_findings > 0, _msg(result)
 
 
 @pytest.mark.firerange
-def test_t4d_numeric_time_blind(firerange):
-    """T4-D: Time-blind in a string context (val= param, no quote needed for sleep)."""
+def test_my4d_numeric_time_blind(firerange):
+    """MY4-D: Time-blind in a string context (val= param, no quote needed for sleep)."""
     result = _scan(
-        f"{firerange}/challenges/t4/timer?val=x",
+        f"{firerange}/challenges/my4/timer?val=x",
         dbms="mysql", technique="T",
         time_threshold=3, risk=1,
     )
@@ -335,10 +335,10 @@ def test_t4d_numeric_time_blind(firerange):
 
 
 @pytest.mark.firerange
-def test_t4e_cookie_injection(firerange):
-    """T4-E: Cookie-based injection (session_id header)."""
+def test_my4e_cookie_injection(firerange):
+    """MY4-E: Cookie-based injection (session_id header)."""
     result = _scan(
-        f"{firerange}/challenges/t4/profile",
+        f"{firerange}/challenges/my4/profile",
         dbms="mysql", technique="E",
         cookies="session_id=sess_abc123",
         cookie_params=["session_id"],
@@ -347,25 +347,35 @@ def test_t4e_cookie_injection(firerange):
     assert result.total_findings > 0, _msg(result)
 
 
+@pytest.mark.firerange
+def test_my4f_header_injection(firerange):
+    """MY4-F: User-Agent-style string injection via ?ua= scanner-accessible fallback."""
+    result = _scan(
+        f"{firerange}/challenges/my4/agent?ua=Mozilla/5.0",
+        dbms="mysql", technique="E", risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
 # ===========================================================================
-# M Y S Q L — Tier 5  (Legend)
+# M Y S Q L — MY5  (Legend)
 # ===========================================================================
 
 @pytest.mark.firerange
-def test_t5a_full_chain(firerange):
-    """T5-A: Full multi-technique scan; must find ≥1 finding."""
+def test_my5a_full_chain(firerange):
+    """MY5-A: Full multi-technique scan; must find ≥1 finding."""
     result = _scan(
-        f"{firerange}/challenges/t5/report?id=1",
+        f"{firerange}/challenges/my5/report?id=1",
         dbms="mysql", technique="EBTUS", level=2, risk=2,
     )
     assert result.total_findings > 0, _msg(result)
 
 
 @pytest.mark.firerange
-def test_t5b_crawl_and_conquer(firerange):
-    """T5-B: Dashboard endpoint — injectable key= param, error-based extraction."""
+def test_my5b_crawl_and_conquer(firerange):
+    """MY5-B: Dashboard endpoint — injectable key= param, error-based extraction."""
     result = _scan(
-        f"{firerange}/challenges/t5/dashboard?key=secret",
+        f"{firerange}/challenges/my5/dashboard?key=secret",
         dbms="mysql", technique="E", level=2, risk=1,
     )
     assert result.total_findings > 0, _msg(result)
@@ -450,6 +460,19 @@ def test_pg3b_post_login(firerange):
 
 
 @pytest.mark.firerange
+def test_pg3c_cookie_injection(firerange):
+    """PG3-C: PostgreSQL cookie injection (auth_token)."""
+    result = _scan(
+        f"{firerange}/challenges/pg/session",
+        dbms="postgres", technique="E",
+        cookies="auth_token=tok_default",
+        cookie_params=["auth_token"],
+        risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
 def test_pg4a_legend(firerange):
     """PG4-A: PostgreSQL full-chain legend challenge."""
     result = _scan(
@@ -515,6 +538,29 @@ def test_sq2c_stacked(firerange):
 
 
 @pytest.mark.firerange
+def test_sq2d_path_param(firerange):
+    """SQ2-D: SQLite path-parameter injection."""
+    result = _scan(
+        f"{firerange}/challenges/sq/item/1",
+        dbms="sqlite", technique="E",
+        path_params=["id"], risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_sq2e_post_login(firerange):
+    """SQ2-E: SQLite POST login form injection."""
+    result = _scan(
+        f"{firerange}/challenges/sq/login",
+        dbms="sqlite", technique="E",
+        data="username=admin&password=x",
+        risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
 def test_sq3a_legend(firerange):
     """SQ3-A: SQLite full-chain legend challenge."""
     result = _scan(
@@ -533,7 +579,7 @@ def test_flag_submission_rejects_wrong(firerange):
     """POST /api/submit-flag with a bogus flag returns incorrect."""
     r = requests.post(
         f"{firerange}/api/submit-flag",
-        json={"player": "CommonHuman", "challenge_id": "t1a", "flag": "WRONG_FLAG"},
+        json={"player": "CommonHuman", "challenge_id": "my1a", "flag": "WRONG_FLAG"},
         timeout=5,
     )
     assert r.status_code in (400, 200)
@@ -542,10 +588,10 @@ def test_flag_submission_rejects_wrong(firerange):
 
 @pytest.mark.firerange
 def test_flag_submission_accepts_correct(firerange):
-    """POST /api/submit-flag with the real t1a flag returns correct=True."""
+    """POST /api/submit-flag with the real my1a flag returns correct=True."""
     r = requests.post(
         f"{firerange}/api/submit-flag",
-        json={"player": "pytest", "challenge_id": "t1a", "flag": "FIRE{t1a_integer_error_based}"},
+        json={"player": "pytest", "challenge_id": "my1a", "flag": "FIRE{my1a_integer_error_based}"},
         timeout=5,
     )
     assert r.status_code == 200
