@@ -123,7 +123,7 @@ def test_challenge_list_json(firerange):
     r = requests.get(f"{firerange}/api/challenges", timeout=5)
     assert r.status_code == 200
     data = r.json()
-    assert isinstance(data, list) and len(data) >= 37
+    assert isinstance(data, list) and len(data) >= 57
     first = data[0]
     assert "flag" not in first
     assert {"challenge_id", "tier", "title", "points"} <= first.keys()
@@ -596,3 +596,203 @@ def test_flag_submission_accepts_correct(firerange):
     )
     assert r.status_code == 200
     assert r.json().get("correct") is True
+
+
+# ===========================================================================
+# M Y S Q L — new challenges
+# ===========================================================================
+
+@pytest.mark.firerange
+def test_my2e_having_group_by(firerange):
+    """MY2-E: HAVING/GROUP BY column enumeration."""
+    result = _scan(
+        f"{firerange}/challenges/my2/groups?dept=engineering",
+        dbms="mysql", technique="E", risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_my3f_schema_walker(firerange):
+    """MY3-F: information_schema enumeration via UNION."""
+    result = _scan(
+        f"{firerange}/challenges/my3/products?id=1",
+        dbms="mysql", technique="U", level=2, risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_my4g_no_space_bypass(firerange):
+    """MY4-G: Space-stripping WAF bypass with /**/ comments."""
+    result = _scan(
+        f"{firerange}/challenges/my4/nospace?id=1",
+        dbms="mysql", technique="E", risk=2,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_my4h_hex_char_bypass(firerange):
+    """MY4-H: Single-quote WAF bypass via hex literals / CHAR()."""
+    result = _scan(
+        f"{firerange}/challenges/my4/hexstore?id=1",
+        dbms="mysql", technique="E", risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_my4i_benchmark_time_blind(firerange):
+    """MY4-I: BENCHMARK() time-blind — string context, SLEEP() blocked."""
+    result = _scan(
+        f"{firerange}/challenges/my4/benchmark?val=x",
+        dbms="mysql", technique="T",
+        time_threshold=3, risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_my4j_case_mixing_bypass(firerange):
+    """MY4-J: Case-mixing keyword bypass."""
+    result = _scan(
+        f"{firerange}/challenges/my4/casefilter?id=1",
+        dbms="mysql", technique="E", risk=2,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_my5c_keyword_doubling(firerange):
+    """MY5-C: Keyword-doubling / CONCAT obfuscation vault."""
+    result = _scan(
+        f"{firerange}/challenges/my5/vault?id=1",
+        dbms="mysql", technique="E", risk=2,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+# ===========================================================================
+# P O S T G R E S Q L — new challenges
+# ===========================================================================
+
+@pytest.mark.firerange
+def test_pg2d_having_group_by(firerange):
+    """PG2-D: HAVING/GROUP BY enumeration on PostgreSQL."""
+    result = _scan(
+        f"{firerange}/challenges/pg/groups?dept=engineering",
+        dbms="postgres", technique="E", risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_pg2e_schema_walker(firerange):
+    """PG2-E: information_schema enumeration via UNION on PostgreSQL."""
+    result = _scan(
+        f"{firerange}/challenges/pg/orders?id=1",
+        dbms="postgres", technique="U", level=2, risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_pg2f_second_order(firerange):
+    """PG2-F: Second-order injection on PostgreSQL — errors surfaced in write response."""
+    result = _scan(
+        f"{firerange}/challenges/pg/profile",
+        dbms="postgres", technique="E",
+        data="username=alice&bio=test",
+        risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_pg3d_dollar_quote_bypass(firerange):
+    """PG3-D: Dollar-quoting bypass on PostgreSQL."""
+    result = _scan(
+        f"{firerange}/challenges/pg/dollarstore?id=1",
+        dbms="postgres", technique="E", risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_pg3e_header_injection(firerange):
+    """PG3-E: Header injection on PostgreSQL via ?ua= fallback."""
+    result = _scan(
+        f"{firerange}/challenges/pg/agent?ua=Mozilla/5.0",
+        dbms="postgres", technique="E", risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_pg4b_pipe_concat(firerange):
+    """PG4-B: Pipe-concat obfuscation vault on PostgreSQL."""
+    result = _scan(
+        f"{firerange}/challenges/pg/vault?id=1",
+        dbms="postgres", technique="E", risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+# ===========================================================================
+# S Q L I T E — new challenges
+# ===========================================================================
+
+@pytest.mark.firerange
+def test_sq1c_version_extracted(firerange):
+    """SQ1-C: sqlite_version() extraction via UNION."""
+    result = _scan(
+        f"{firerange}/challenges/sq/users?id=1",
+        dbms="sqlite", technique="U", level=2, risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_sq2f_char_quote_bypass(firerange):
+    """SQ2-F: CHAR() quote bypass on SQLite."""
+    result = _scan(
+        f"{firerange}/challenges/sq/charstore?id=1",
+        dbms="sqlite", technique="E", risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_sq2g_sqlite_master_enum(firerange):
+    """SQ2-G: sqlite_master enumeration via path-param endpoint."""
+    result = _scan(
+        f"{firerange}/challenges/sq/item/1",
+        dbms="sqlite", technique="E",
+        path_params=["id"], risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_sq2h_second_order(firerange):
+    """SQ2-H: Second-order injection on SQLite — errors surfaced in write response."""
+    result = _scan(
+        f"{firerange}/challenges/sq/profile",
+        dbms="sqlite", technique="E",
+        data="username=alice&bio=test",
+        risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_sq2i_json_body(firerange):
+    """SQ2-I: JSON body injection on SQLite."""
+    result = _scan(
+        f"{firerange}/challenges/sq/api/member",
+        dbms="sqlite", technique="E",
+        data='{"member_id": 1}',
+        risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
