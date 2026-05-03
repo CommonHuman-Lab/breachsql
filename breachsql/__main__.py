@@ -32,6 +32,13 @@ from breachsql._cli.summary import print_summary
 _cli_logger = get_logger("breachsql")
 
 
+def _split_param_list(val) -> list[str]:
+    """Accept either a list (from interactive mode) or a comma-separated string."""
+    if isinstance(val, list):
+        return [p.strip() for p in val if str(p).strip()]
+    return [p.strip() for p in str(val).split(",") if p.strip()]
+
+
 def main() -> None:
     parser = build_parser()
     args   = parser.parse_args()
@@ -100,7 +107,9 @@ def main() -> None:
         time_threshold=args.time_threshold,
         risk=args.risk,
         second_url=getattr(args, "second_url", ""),
-        path_params=[p.strip() for p in getattr(args, "path_params", "").split(",") if p.strip()],
+        path_params=_split_param_list(getattr(args, "path_params", "")),
+        cookie_params=_split_param_list(getattr(args, "cookie_params", "")),
+        header_params=_split_param_list(getattr(args, "header_params", "")),
     )
 
     all_results = []

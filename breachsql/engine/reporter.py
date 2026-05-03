@@ -79,12 +79,13 @@ class UnionFinding:
 
 @dataclass
 class OOBFinding:
-    """Out-of-band payload injected — requires callback confirmation."""
+    """Out-of-band payload injected — callback confirmation required externally."""
     url:          str
     parameter:    str
     method:       str
     payload:      str
     callback_url: str
+    confirmed:    bool = False   # Always False until external callback is verified
 
 
 @dataclass

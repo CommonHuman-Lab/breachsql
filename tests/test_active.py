@@ -437,15 +437,15 @@ class TestTestParam:
             scan_param(_surface(), ["none"], opts, injector, result)
             mock_bool.assert_not_called()
 
-    def test_union_requires_level2(self):
-        """Union detection should not run at level=1."""
+    def test_union_runs_at_level1(self):
+        """Union detection should run at level=1 (no longer gated by level)."""
         injector = _mock_injector()
         opts = ScanOptions(technique="U", level=1)
         result = ScanResult(target="https://x.com/")
 
         with patch("breachsql.engine._scanner.active._test_union") as mock_union:
             scan_param(_surface(), ["none"], opts, injector, result)
-            mock_union.assert_not_called()
+            mock_union.assert_called_once()
 
     def test_union_runs_at_level2(self):
         """Union detection should run at level=2."""

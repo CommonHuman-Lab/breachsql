@@ -156,13 +156,14 @@ def run_oob(
                 logger.debug("OOB inject error %s param=%s: %s", url, param, exc)
                 continue
 
-            logger.finding("OOB payload injected: %s param=%s", url, param)
+            logger.finding("OOB payload injected (unconfirmed — check callback server): %s param=%s", url, param)
             result.append_oob(OOBFinding(
                 url=url,
                 parameter=param,
                 method=method,
                 payload=payload,
                 callback_url=opts.oob_callback,
+                confirmed=False,
             ))
             return  # one OOB injection per param
 

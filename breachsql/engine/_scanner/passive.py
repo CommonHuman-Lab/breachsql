@@ -71,10 +71,12 @@ def _check_interesting_headers(url: str, resp, result: ScanResult) -> None:
             msg = f"Passive header [{hdr}: {val}] ({note})"
             logger.debug(msg)
             result.append_log(msg)
-            # Auto-hint DBMS
+            # Auto-hint DBMS — only set when the header gives a strong signal
             if result.dbms_detected is None:
                 val_lower = val.lower()
-                if "php" in val_lower or "apache" in val_lower or "mysql" in val_lower:
+                if "mysql" in val_lower or "mariadb" in val_lower:
                     result.dbms_detected = "mysql"
-                elif "asp" in val_lower or "iis" in val_lower:
+                elif "asp" in val_lower or "iis" in val_lower or "mssql" in val_lower:
                     result.dbms_detected = "mssql"
+                elif "postgres" in val_lower or "pgsql" in val_lower:
+                    result.dbms_detected = "postgres"

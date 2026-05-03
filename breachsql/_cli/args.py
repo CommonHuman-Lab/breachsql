@@ -90,7 +90,9 @@ def interactive_prompts() -> argparse.Namespace:
     time_thr   = _prompt("  Time threshold", default="4", hint="seconds to flag time-based hit")
     risk_str   = _prompt("  Risk level", default="1", hint="1=safe 2=moderate 3=aggressive")
     second_url = _prompt("  Second URL", hint="read SQLi response from this URL (blank to skip)")
-    path_params = _prompt("  Path params", hint="comma-separated names e.g. id,slug (blank to auto-detect)")
+    path_params   = _prompt("  Path params",   hint="comma-separated names e.g. id,slug (blank to auto-detect)")
+    cookie_params = _prompt("  Cookie params", hint="comma-separated cookie names to inject (blank to skip)")
+    header_params = _prompt("  Header params", hint="comma-separated header names to inject (blank to skip)")
 
     _section("Scan options")
     level_str   = _prompt("  Scan level",  default="1", hint="1=fast  2=thorough  3=deep")
@@ -132,6 +134,8 @@ def interactive_prompts() -> argparse.Namespace:
         risk=_safe_int(risk_str, 1, 1, 3),
         second_url=second_url,
         path_params=[p.strip() for p in path_params.split(",") if p.strip()],
+        cookie_params=[p.strip() for p in cookie_params.split(",") if p.strip()],
+        header_params=[p.strip() for p in header_params.split(",") if p.strip()],
     )
 
 
@@ -190,6 +194,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--path-params", default="", dest="path_params", metavar="NAMES",
                    help="Comma-separated path segment names to inject "
                         "(auto-detected from :name/{name} patterns if omitted)")
+    p.add_argument("--cookie-params", default="", dest="cookie_params", metavar="NAMES",
+                   help="Comma-separated cookie names to inject as SQLi surfaces")
+    p.add_argument("--header-params", default="", dest="header_params", metavar="NAMES",
+                   help="Comma-separated HTTP header names to inject as SQLi surfaces")
 
     # --- Output ---
     p.add_argument("-o", "--output", default="", metavar="FILE",

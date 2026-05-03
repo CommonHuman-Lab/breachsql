@@ -29,6 +29,10 @@ DEFAULT_UA = (
   "Chrome/124.0.0.0 Safari/537.36"
 )
 
+# Back-off applied when the server returns HTTP 429 (Too Many Requests)
+_RATE_LIMIT_BACKOFF = 5.0   # seconds to wait before retrying
+_RATE_LIMIT_RETRIES = 2     # max retries on 429
+
 
 class Injector:
   """
@@ -88,20 +92,38 @@ class Injector:
     if self.delay:
       time.sleep(self.delay)
     self.request_count += 1
-    return self._session.get(url, params=params, timeout=self.timeout, **kwargs)
+    resp = self._session.get(url, params=params, timeout=self.timeout, **kwargs)
+    return self._handle_rate_limit(resp, lambda: self._session.get(url, params=params, timeout=self.timeout, **kwargs))
 
   def post(self, url: str, data: Optional[Dict[str, Any]] = None,
            json_body: Optional[Any] = None, **kwargs) -> Response:
     if self.delay:
       time.sleep(self.delay)
     self.request_count += 1
-    return self._session.post(
-      url, data=data, json=json_body, timeout=self.timeout, **kwargs
-    )
+    resp = self._session.post(url, data=data, json=json_body, timeout=self.timeout, **kwargs)
+    return self._handle_rate_limit(resp, lambda: self._session.post(url, data=data, json=json_body, timeout=self.timeout, **kwargs))
 
   def head(self, url: str, **kwargs) -> Response:
     self.request_count += 1
     return self._session.head(url, timeout=self.timeout, allow_redirects=True, **kwargs)
+
+  def _handle_rate_limit(self, resp: Response, retry_fn) -> Response:
+    """If the server returned 429, back off and retry up to _RATE_LIMIT_RETRIES times."""
+    for _ in range(_RATE_LIMIT_RETRIES):
+      if resp.status_code != 429:
+        break
+      wait = _RATE_LIMIT_BACKOFF
+      # Honour Retry-After header if present
+      retry_after = resp.headers.get("Retry-After", "")
+      if retry_after:
+        try:
+          wait = max(float(retry_after), _RATE_LIMIT_BACKOFF)
+        except ValueError:
+          pass
+      time.sleep(wait)
+      self.request_count += 1
+      resp = retry_fn()
+    return resp
 
   # -------------------------------------------------------------------------
   # Injection helpers
