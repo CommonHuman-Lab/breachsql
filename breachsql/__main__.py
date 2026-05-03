@@ -100,6 +100,7 @@ def main() -> None:
         time_threshold=args.time_threshold,
         risk=args.risk,
         second_url=getattr(args, "second_url", ""),
+        path_params=[p.strip() for p in getattr(args, "path_params", "").split(",") if p.strip()],
     )
 
     all_results = []

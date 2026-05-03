@@ -130,6 +130,21 @@ class Injector:
     body[param] = payload
     return self.post(url, json_body=body)
 
+  def inject_path(self, url: str, segment_index: int, payload: str) -> Response:
+    """Inject `payload` into a URL path segment by position index.
+
+    The original path segment at *segment_index* (0-based, after splitting on
+    ``/``) is replaced with ``payload``.  Use this for REST-style path
+    parameters such as ``/rest/track-order/:id``.
+    """
+    parsed = up.urlparse(url)
+    parts  = parsed.path.split("/")  # e.g. ['', 'rest', 'track-order', '123']
+    if 0 <= segment_index < len(parts):
+      parts[segment_index] = up.quote(str(payload), safe="")
+    new_path = "/".join(parts)
+    target   = up.urlunparse(parsed._replace(path=new_path))
+    return self.get(target)
+
   def inject_header(self, url: str, header_name: str, payload: str) -> Response:
     """Inject `payload` as the value of a custom HTTP request header."""
     return self.get(url, headers={header_name: payload})

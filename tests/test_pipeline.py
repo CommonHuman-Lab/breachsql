@@ -149,7 +149,75 @@ class TestPipelineSecondUrl:
         with patch("breachsql.engine._scanner.pipeline.scan_param") as mock_scan:
             run("https://x.com/inject", opts, injector, result)
             # opts (containing second_url) must be passed to scan_param
-            for c in mock_scan.call_args_list:
-                _, kwargs = c
-                passed_opts = c[0][2] if len(c[0]) >= 3 else kwargs.get("opts")
-                assert passed_opts.second_url == "https://x.com/result"
+        for c in mock_scan.call_args_list:
+            _, kwargs = c
+            passed_opts = c[0][2] if len(c[0]) >= 3 else kwargs.get("opts")
+            assert passed_opts.second_url == "https://x.com/result"
+
+
+@patch("breachsql.engine._scanner.pipeline.waf_detect")
+class TestPipelinePathParams:
+    def test_colon_placeholder_creates_path_surface(self, mock_waf):
+        """:id pattern in URL path should auto-create a PATH surface."""
+        waf_result = MagicMock(detected=False, evasions=["none"])
+        mock_waf.detect.return_value = waf_result
+
+        injector = _mock_injector(params=[])  # no GET params
+        opts = ScanOptions(technique="E")
+        result = ScanResult(target="https://x.com/rest/track-order/:id")
+
+        with patch("breachsql.engine._scanner.pipeline.scan_param") as mock_scan:
+            run("https://x.com/rest/track-order/:id", opts, injector, result)
+            assert mock_scan.call_count == 1
+            surface = mock_scan.call_args[0][0]
+            assert surface["method"] == "PATH"
+            assert surface["single_param"] == "id"
+            assert surface["path_index"] == 3  # ['', 'rest', 'track-order', ':id']
+
+        assert result.params_tested == 1
+
+    def test_brace_placeholder_creates_path_surface(self, mock_waf):
+        """{name} pattern in URL path should auto-create a PATH surface."""
+        waf_result = MagicMock(detected=False, evasions=["none"])
+        mock_waf.detect.return_value = waf_result
+
+        injector = _mock_injector(params=[])
+        opts = ScanOptions(technique="E")
+        result = ScanResult(target="https://x.com/users/{id}/profile")
+
+        with patch("breachsql.engine._scanner.pipeline.scan_param") as mock_scan:
+            run("https://x.com/users/{id}/profile", opts, injector, result)
+            assert mock_scan.call_count == 1
+            surface = mock_scan.call_args[0][0]
+            assert surface["method"] == "PATH"
+            assert surface["single_param"] == "id"
+
+    def test_explicit_path_params_option(self, mock_waf):
+        """--path-params names should force path surface creation."""
+        waf_result = MagicMock(detected=False, evasions=["none"])
+        mock_waf.detect.return_value = waf_result
+
+        injector = _mock_injector(params=[])
+        # URL has no placeholder syntax but user specified --path-params id
+        opts = ScanOptions(technique="E", path_params=["id"])
+        result = ScanResult(target="https://x.com/rest/track-order/123")
+
+        with patch("breachsql.engine._scanner.pipeline.scan_param") as mock_scan:
+            run("https://x.com/rest/track-order/123", opts, injector, result)
+            assert mock_scan.call_count == 1
+            surface = mock_scan.call_args[0][0]
+            assert surface["method"] == "PATH"
+            assert surface["single_param"] == "id"
+
+    def test_no_path_placeholders_no_path_surfaces(self, mock_waf):
+        """Plain URL with no placeholders and no --path-params should have 0 path surfaces."""
+        waf_result = MagicMock(detected=False, evasions=["none"])
+        mock_waf.detect.return_value = waf_result
+
+        injector = _mock_injector(params=[])
+        opts = ScanOptions(technique="E")
+        result = ScanResult(target="https://x.com/search")
+
+        with patch("breachsql.engine._scanner.pipeline.scan_param") as mock_scan:
+            run("https://x.com/search", opts, injector, result)
+            assert mock_scan.call_count == 0

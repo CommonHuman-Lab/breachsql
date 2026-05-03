@@ -7,6 +7,7 @@ Scan pipeline: WAF → passive → surface building → active → time-blind �
 
 from __future__ import annotations
 
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List
 
@@ -58,6 +59,44 @@ def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> 
                 "params": post_params, "single_param": param,
                 "json_body": _is_json_body,
             })
+
+    # Path parameter surfaces — inject into URL path segments.
+    # Detect :name / {name} placeholders in the path, or use --path-params names.
+    import urllib.parse as _up
+    _path_parts = _up.urlparse(url).path.split("/")
+    # Map param name -> segment index
+    _path_param_indices: dict = {}
+    if opts.path_params:
+        # User supplied explicit names; match against path parts
+        for _i, _part in enumerate(_path_parts):
+            # Strip placeholder syntax if present
+            _plain = _part.lstrip(":").strip("{}")
+            if _plain in opts.path_params:
+                _path_param_indices[_plain] = _i
+        # Also accept positional names that don't appear literally in the path
+        # (e.g. the user knows segment 3 is "id") — use index order as fallback
+        for _name in opts.path_params:
+            if _name not in _path_param_indices:
+                # Try to find a numeric-looking segment to inject into
+                for _i, _part in enumerate(_path_parts):
+                    if _i not in _path_param_indices.values() and _part and not _part.startswith("{") and not _part.startswith(":"):
+                        _path_param_indices[_name] = _i
+                        break
+    else:
+        # Auto-detect :name and {name} patterns
+        for _i, _part in enumerate(_path_parts):
+            if _part.startswith(":") and len(_part) > 1:
+                _path_param_indices[_part[1:]] = _i
+            elif _part.startswith("{") and _part.endswith("}"):
+                _path_param_indices[_part[1:-1]] = _i
+
+    for _pname, _pidx in _path_param_indices.items():
+        surfaces.append({
+            "url": url, "method": "PATH",
+            "params": {_pname: _path_parts[_pidx]},
+            "single_param": _pname,
+            "path_index": _pidx,
+        })
 
     if opts.crawl:
         logger.info("Crawling %s (max_pages=%s, depth=%s)", url, opts.max_pages, opts.max_depth)

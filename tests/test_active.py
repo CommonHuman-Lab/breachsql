@@ -705,3 +705,85 @@ class TestJsonPostBody:
         }
         scan_param(surface, ["none"], opts, inj, result)
         assert len(result.error_based) >= 1
+
+
+# ---------------------------------------------------------------------------
+# PATH method injection tests
+# ---------------------------------------------------------------------------
+
+class TestPathInjection:
+    def _make_path_injector(self, good_text="<html>OK</html>", error_text=None):
+        """Build a mock injector that routes inject_path calls to canned responses."""
+        inj = MagicMock()
+
+        def _inject_path(url, index, value):
+            r = MagicMock()
+            r.status_code = 200
+            if error_text and "'" in str(value):
+                r.text = error_text
+            else:
+                r.text = good_text
+            return r
+
+        inj.inject_path.side_effect = _inject_path
+        # Baseline inject_get shouldn't be called for PATH surfaces, but mock anyway
+        r_ok = MagicMock()
+        r_ok.text = good_text
+        r_ok.status_code = 200
+        inj.inject_get.return_value = r_ok
+        return inj
+
+    def test_fetch_path_calls_inject_path(self):
+        """_fetch with method=PATH must call injector.inject_path, not inject_get."""
+        inj = self._make_path_injector()
+        resp = _fetch(inj, "https://x.com/order/123", "PATH",
+                      {"id": "123"}, "id", "' OR 1=1--", path_index=2)
+        assert resp is not None
+        inj.inject_path.assert_called_once()
+        inj.inject_get.assert_not_called()
+
+    def test_fetch_path_index_passed_correctly(self):
+        """The path_index argument must be forwarded to inject_path."""
+        inj = self._make_path_injector()
+        _fetch(inj, "https://x.com/a/b/c/123", "PATH",
+               {"id": "123"}, "id", "'", path_index=3)
+        call_args = inj.inject_path.call_args
+        assert call_args[0][1] == 3  # second positional arg is the index
+
+    def test_fetch_path_baseline_appends_nothing(self):
+        """Baseline fetch (value=None) should pass original value unchanged."""
+        inj = self._make_path_injector()
+        _fetch(inj, "https://x.com/order/42", "PATH",
+               {"id": "42"}, "id", None, path_index=2)
+        inj.inject_path.assert_called_once()
+        call_args = inj.inject_path.call_args
+        # Third arg is the injected value — should equal original "42" unchanged
+        assert call_args[0][2] == "42"
+
+    def test_scan_param_path_surface_detects_error(self):
+        """scan_param with method=PATH surface detects error-based SQLi."""
+        import json as _json
+
+        error_html = "<html>You have an error in your SQL syntax</html>"
+        ok_html    = "<html>Order found</html>"
+
+        inj = MagicMock()
+        def _inject_path(url, index, value):
+            r = MagicMock()
+            r.status_code = 200
+            r.text = error_html if "'" in str(value) else ok_html
+            return r
+        inj.inject_path.side_effect = _inject_path
+
+        opts    = ScanOptions(technique="E", dbms="mysql")
+        result  = ScanResult(target="https://x.com/")
+        surface = {
+            "url":          "https://x.com/rest/track-order/:id",
+            "method":       "PATH",
+            "params":       {"id": "1"},
+            "single_param": "id",
+            "path_index":   3,
+        }
+        scan_param(surface, ["none"], opts, inj, result)
+        assert len(result.error_based) >= 1
+        assert result.error_based[0].method == "PATH"

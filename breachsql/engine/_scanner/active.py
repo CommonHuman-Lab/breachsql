@@ -56,13 +56,14 @@ def scan_param(
     method    = surface["method"]
     params    = surface["params"]
     param     = surface["single_param"]
-    json_body = surface.get("json_body", False)
+    json_body  = surface.get("json_body", False)
+    path_index = surface.get("path_index", 0)
     second_url = getattr(opts, "second_url", "")
 
     # Fetch a clean baseline using the original param value (not empty string),
     # so the baseline represents normal application behaviour for a valid input.
     baseline = _fetch(injector, url, method, params, param, None,
-                      second_url=second_url, json_body=json_body)
+                      second_url=second_url, json_body=json_body, path_index=path_index)
     if baseline is None:
         return
 
@@ -70,15 +71,15 @@ def scan_param(
 
     if opts.use_error:
         _test_error_based(url, method, params, param, evasion, opts, injector, result,
-                          second_url, json_body)
+                          second_url, json_body, path_index)
 
     if opts.use_boolean:
         _test_boolean(url, method, params, param, baseline, evasion, opts, injector, result,
-                      second_url, json_body)
+                      second_url, json_body, path_index)
 
     if opts.use_union and opts.level >= 2:
         _test_union(url, method, params, param, evasion, opts, injector, result,
-                    second_url, json_body)
+                    second_url, json_body, path_index)
 
 
 # ---------------------------------------------------------------------------
@@ -88,14 +89,14 @@ def scan_param(
 def _test_error_based(
     url: str, method: str, params: Dict[str, str], param: str,
     evasion: str, opts: ScanOptions, injector: Injector, result: ScanResult,
-    second_url: str = "", json_body: bool = False,
+    second_url: str = "", json_body: bool = False, path_index: int = 0,
 ) -> None:
     payloads = get_error_payloads(opts.dbms, opts.risk)
 
     for raw_payload in payloads:
         payload = apply_evasion(raw_payload, evasion)
         resp = _fetch(injector, url, method, params, param, payload,
-                      second_url=second_url, json_body=json_body)
+                      second_url=second_url, json_body=json_body, path_index=path_index)
         if resp is None:
             continue
 
@@ -127,7 +128,7 @@ def _test_error_based(
 def _test_boolean(
     url: str, method: str, params: Dict[str, str], param: str,
     baseline: str, evasion: str, opts: ScanOptions, injector: Injector, result: ScanResult,
-    second_url: str = "", json_body: bool = False,
+    second_url: str = "", json_body: bool = False, path_index: int = 0,
 ) -> None:
     pairs = get_boolean_pairs(opts.risk)
 
@@ -136,9 +137,9 @@ def _test_boolean(
         pf = apply_evasion(raw_false, evasion)
 
         resp_true  = _fetch(injector, url, method, params, param, pt,
-                            second_url=second_url, json_body=json_body)
+                            second_url=second_url, json_body=json_body, path_index=path_index)
         resp_false = _fetch(injector, url, method, params, param, pf,
-                            second_url=second_url, json_body=json_body)
+                            second_url=second_url, json_body=json_body, path_index=path_index)
         if resp_true is None or resp_false is None:
             continue
 
@@ -196,12 +197,12 @@ def _test_boolean(
 def _test_union(
     url: str, method: str, params: Dict[str, str], param: str,
     evasion: str, opts: ScanOptions, injector: Injector, result: ScanResult,
-    second_url: str = "", json_body: bool = False,
+    second_url: str = "", json_body: bool = False, path_index: int = 0,
 ) -> None:
     # Step 1: find column count via ORDER BY
     max_cols = getattr(opts, "max_union_cols", 20)
     col_count = _find_column_count(url, method, params, param, evasion, injector,
-                                   second_url, max_cols, json_body)
+                                   second_url, max_cols, json_body, path_index)
     if col_count is None:
         return
 
@@ -212,7 +213,7 @@ def _test_union(
     for raw_payload in probes:
         payload = apply_evasion(raw_payload, evasion)
         resp = _fetch(injector, url, method, params, param, payload,
-                      second_url=second_url, json_body=json_body)
+                      second_url=second_url, json_body=json_body, path_index=path_index)
         if resp is None:
             continue
 
@@ -256,7 +257,7 @@ def _test_union(
 def _find_column_count(
     url: str, method: str, params: Dict[str, str], param: str,
     evasion: str, injector: Injector, second_url: str = "",
-    max_cols: int = 20, json_body: bool = False,
+    max_cols: int = 20, json_body: bool = False, path_index: int = 0,
 ) -> Optional[int]:
     """Determine column count using ORDER BY N probes.
 
@@ -274,7 +275,7 @@ def _find_column_count(
 
     # Fetch a 'known-good' baseline to detect content disappearance
     baseline_resp = _fetch(injector, url, method, params, param, None,
-                           second_url=second_url, json_body=json_body)
+                           second_url=second_url, json_body=json_body, path_index=path_index)
     baseline_words: set = set()
     if baseline_resp:
         # Use a small set of non-trivial tokens from the baseline as a presence check
@@ -330,7 +331,7 @@ def _find_column_count(
 
         payload = apply_evasion(raw_payload, evasion)
         resp = _fetch(injector, url, method, params, param, payload,
-                      second_url=second_url, json_body=json_body)
+                      second_url=second_url, json_body=json_body, path_index=path_index)
         if resp is None:
             continue
 
@@ -376,6 +377,7 @@ def _fetch(
     value: Optional[str],
     second_url: str = "",
     json_body: bool = False,
+    path_index: int = 0,
 ) -> Optional[str]:
     """
     Inject *value* into *param* and return response text, or None on error.
@@ -399,7 +401,7 @@ def _fetch(
     """
     import urllib.parse as _up
 
-    # Resolve original param value (from URL query string for GET, from params for POST)
+    # Resolve original param value (from URL query string for GET, from params dict otherwise)
     if method.upper() == "GET":
         qs = _up.parse_qs(_up.urlparse(url).query, keep_blank_values=True)
         original = qs.get(param, [""])[0]
@@ -423,6 +425,8 @@ def _fetch(
                     injector.post(url, json_body=injected)
                 else:
                     injector.post(url, data=injected)
+            elif method.upper() == "PATH":
+                injector.inject_path(url, path_index, injected[param])
             else:
                 injector.inject_get(url, param, injected[param])
             resp = injector.get(second_url)
@@ -431,6 +435,8 @@ def _fetch(
                 resp = injector.post(url, json_body=injected)
             else:
                 resp = injector.post(url, data=injected)
+        elif method.upper() == "PATH":
+            resp = injector.inject_path(url, path_index, injected[param])
         else:
             # For GET, rebuild the URL with the injected param value
             resp = injector.inject_get(url, param, injected[param])
@@ -443,11 +449,6 @@ def _fetch(
                 resp.status_code, url, param,
             )
             return None
-
-        return resp.text
-    except Exception as exc:
-        logger.debug("Request error for %s param=%s: %s", url, param, exc)
-        return None
 
         return resp.text
     except Exception as exc:

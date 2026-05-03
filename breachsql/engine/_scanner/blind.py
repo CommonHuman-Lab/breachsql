@@ -32,10 +32,12 @@ def run_time_based(
     result: ScanResult,
 ) -> None:
     """Test a single surface for time-based blind SQLi."""
-    url    = surface["url"]
-    method = surface["method"]
-    params = surface["params"]
-    param  = surface["single_param"]
+    url       = surface["url"]
+    method    = surface["method"]
+    params    = surface["params"]
+    param     = surface["single_param"]
+    json_body  = surface.get("json_body", False)
+    path_index = surface.get("path_index", 0)
 
     evasion    = evasions[0] if evasions else EVASION_NONE
     dbms       = result.dbms_detected or opts.dbms
@@ -44,20 +46,22 @@ def run_time_based(
     payloads = get_time_payloads(dbms, opts.time_threshold)[:_MAX_TIME_PAYLOADS]
 
     # Measure baseline response time (2 samples, take min)
-    baseline_time = _measure_baseline(injector, url, method, params, param, second_url)
+    baseline_time = _measure_baseline(injector, url, method, params, param, second_url, json_body, path_index)
     if baseline_time is None:
         return
 
     for raw_payload in payloads:
         payload = apply_evasion(raw_payload, evasion)
-        elapsed = _timed_fetch(injector, url, method, params, param, payload, second_url=second_url)
+        elapsed = _timed_fetch(injector, url, method, params, param, payload,
+                               second_url=second_url, json_body=json_body, path_index=path_index)
         if elapsed is None:
             continue
 
         # Hit if we exceed threshold AND the delay is at least 2× baseline
         if elapsed >= opts.time_threshold and elapsed >= baseline_time * 2:
             # Confirm with a second request
-            elapsed2 = _timed_fetch(injector, url, method, params, param, payload, second_url=second_url)
+            elapsed2 = _timed_fetch(injector, url, method, params, param, payload,
+                                    second_url=second_url, json_body=json_body, path_index=path_index)
             if elapsed2 is not None and elapsed2 >= opts.time_threshold:
                 _dbms = _infer_dbms_from_payload(raw_payload)
                 logger.finding(
@@ -89,10 +93,12 @@ def run_oob(
     if not opts.oob_callback:
         return
 
-    url    = surface["url"]
-    method = surface["method"]
-    params = surface["params"]
-    param  = surface["single_param"]
+    url       = surface["url"]
+    method    = surface["method"]
+    params    = surface["params"]
+    param     = surface["single_param"]
+    json_body  = surface.get("json_body", False)
+    path_index = surface.get("path_index", 0)
 
     evasion = evasions[0] if evasions else EVASION_NONE
     dbms    = result.dbms_detected or opts.dbms
@@ -103,7 +109,12 @@ def run_oob(
         payload = apply_evasion(raw_payload, evasion)
         try:
             if method.upper() == "POST":
-                injector.post(url, data={**params, param: payload})
+                if json_body:
+                    injector.post(url, json_body={**params, param: payload})
+                else:
+                    injector.post(url, data={**params, param: payload})
+            elif method.upper() == "PATH":
+                injector.inject_path(url, path_index, payload)
             else:
                 injector.inject_get(url, param, payload)
         except Exception as exc:
@@ -133,6 +144,8 @@ def _timed_fetch(
     param: str,
     value: str,
     second_url: str = "",
+    json_body: bool = False,
+    path_index: int = 0,
 ) -> Optional[float]:
     """Send request with *value* appended to the original param and return elapsed seconds."""
     import urllib.parse as _up
@@ -144,17 +157,28 @@ def _timed_fetch(
     else:
         original = params.get(param, "")
     injected_value = original + value
+    injected = {**params, param: injected_value}
 
     t0 = time.monotonic()
     try:
         if second_url:
             if method.upper() == "POST":
-                injector.post(url, data={**params, param: injected_value})
+                if json_body:
+                    injector.post(url, json_body=injected)
+                else:
+                    injector.post(url, data=injected)
+            elif method.upper() == "PATH":
+                injector.inject_path(url, path_index, injected_value)
             else:
                 injector.inject_get(url, param, injected_value)
             injector.get(second_url)
         elif method.upper() == "POST":
-            injector.post(url, data={**params, param: injected_value})
+            if json_body:
+                injector.post(url, json_body=injected)
+            else:
+                injector.post(url, data=injected)
+        elif method.upper() == "PATH":
+            injector.inject_path(url, path_index, injected_value)
         else:
             injector.inject_get(url, param, injected_value)
         return time.monotonic() - t0
@@ -169,11 +193,14 @@ def _measure_baseline(
     params: Dict[str, str],
     param: str,
     second_url: str = "",
+    json_body: bool = False,
+    path_index: int = 0,
 ) -> Optional[float]:
     """Return the minimum of two clean request times."""
     times = []
     for _ in range(2):
-        t = _timed_fetch(injector, url, method, params, param, "1", second_url=second_url)
+        t = _timed_fetch(injector, url, method, params, param, "1",
+                         second_url=second_url, json_body=json_body, path_index=path_index)
         if t is not None:
             times.append(t)
     return min(times) if times else None

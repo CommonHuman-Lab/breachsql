@@ -7,7 +7,7 @@ from __future__ import annotations
 import warnings
 from typing import Any
 
-_VALID_TECHNIQUE_CHARS = frozenset("EBTUO")
+_VALID_TECHNIQUE_CHARS = frozenset("EBTUSO")
 
 
 class ScanOptions:
@@ -35,6 +35,7 @@ class ScanOptions:
         risk:             int               = 1,        # 1-3
         second_url:       str               = "",       # read response from different URL
         max_union_cols:   int               = 20,       # max columns to probe in UNION detection
+        path_params:      list[str] | None  = None,     # path segment names to inject
     ) -> None:
         # Shared
         self.crawl            = crawl
@@ -68,6 +69,7 @@ class ScanOptions:
         self.risk             = max(1, min(risk, 3))
         self.second_url       = second_url.strip()  # if set, read responses from here
         self.max_union_cols   = max(1, min(max_union_cols, 100))
+        self.path_params      = path_params or []
 
     # Convenience: check which techniques are enabled
     @property
@@ -78,5 +80,7 @@ class ScanOptions:
     def use_time(self)    -> bool: return "T" in self.technique
     @property
     def use_union(self)   -> bool: return "U" in self.technique
+    @property
+    def use_stacked(self) -> bool: return "S" in self.technique
     @property
     def use_oob(self)     -> bool: return "O" in self.technique and bool(self.oob_callback)
