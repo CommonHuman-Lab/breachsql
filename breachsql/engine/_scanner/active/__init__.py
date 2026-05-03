@@ -1,40 +1,50 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (c) 2026 CommonHuman-Lab
 """
-BreachSQL — engine/_scanner/active.py
+BreachSQL — engine/_scanner/active/
 Error-based, boolean-based, and union-based SQLi detection.
-"""
 
+Sub-modules:
+  - _helpers : HTTP fetch helper and response comparison utilities
+
+All detection logic (scan_param, _test_error_based, _test_boolean, _test_union,
+_detect_db_error, _find_column_count) lives here in __init__.py so that
+references can be patched by tests via the package namespace.
+"""
 from __future__ import annotations
 
-import difflib
 import re
-import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..log import get_logger
-from ..reporter import ErrorBasedFinding, BooleanFinding, UnionFinding, ExtractionFinding, ScanResult
-from ..http.injector import Injector, parse_post_data
-from ..http.waf_detect import EVASION_NONE
-from .options import ScanOptions
-from .payloads import (
+from ...log import get_logger
+from ...reporter import ErrorBasedFinding, BooleanFinding, UnionFinding, ExtractionFinding, ScanResult
+from ...http.injector import Injector
+from ...http.waf_detect import EVASION_NONE
+from ..options import ScanOptions
+from ..payloads import (
     DB_ERROR_PATTERNS,
     apply_evasion,
     get_error_payloads,
     get_boolean_pairs,
+    get_db_contents_payloads,
+    get_enum_payloads,
     make_marker,
     order_by_probes,
     union_null_probes,
 )
+from ._helpers import (
+    _fetch,
+    _diff_score,
+    _len_ratio,
+    _has_stable_boolean_signal,
+    _extract_marker,
+    _is_path_reflected,
+    _BOOL_CONFIRM_THRESHOLD,
+    _BOOL_LIKELY_THRESHOLD,
+    _BOOL_LEN_RATIO_THRESHOLD,
+)
 
 logger = get_logger("breachsql.active")
-
-# diff score threshold above which we consider a boolean result confirmed
-_BOOL_CONFIRM_THRESHOLD = 0.20
-# diff score threshold above which we flag it as likely (lower confidence)
-_BOOL_LIKELY_THRESHOLD  = 0.10
-# content-length ratio difference that alone signals a boolean response divergence
-_BOOL_LEN_RATIO_THRESHOLD = 0.02  # 2% length difference
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +104,6 @@ def scan_param(
     # Level 3: run extended payload sets (db_contents + enum) via error channel
     if opts.level >= 3 and opts.use_error:
         evasion = evasions[0] if evasions else EVASION_NONE
-        from .payloads import get_db_contents_payloads, get_enum_payloads
         _dbms = result.dbms_detected or opts.dbms
         _extended = (
             get_db_contents_payloads(_dbms, "tables")
@@ -120,6 +129,23 @@ def scan_param(
 # ---------------------------------------------------------------------------
 # Error-based detection
 # ---------------------------------------------------------------------------
+
+def _detect_db_error(body: str) -> Tuple[str, str]:
+    """
+    Scan *body* for DB error patterns.
+    Returns (dbms_name, evidence_snippet) or ("", "").
+    """
+    body_lower = body.lower()
+    # Check specific DBMSes first, then generic
+    for dbms in ("mysql", "mariadb", "mssql", "postgres", "sqlite", "oracle", "generic"):
+        for pattern in DB_ERROR_PATTERNS[dbms]:
+            m = re.search(pattern, body_lower)
+            if m:
+                start = max(0, m.start() - 30)
+                end   = min(len(body), m.end() + 80)
+                return dbms, body[start:end].strip()
+    return "", ""
+
 
 def _test_error_based(
     url: str, method: str, params: Dict[str, str], param: str,
@@ -182,7 +208,6 @@ def _test_boolean(
         baseline_score = _diff_score(baseline, resp_true)
 
         # Also check content-length divergence — catches tiny textual diffs
-        # (e.g. "User ID exists" vs "User ID is MISSING") in large HTML pages
         len_ratio = _len_ratio(resp_true, resp_false)
         baseline_len_ratio = _len_ratio(baseline, resp_true)
 
@@ -190,9 +215,6 @@ def _test_boolean(
         # while false response diverges — catches single-line blind SQLi
         has_stable_signal = _has_stable_boolean_signal(baseline, resp_true, resp_false)
 
-        # A strong boolean signal is either a content diff OR a length divergence
-        # that does not also appear between baseline and the true response
-        # (which would indicate an unstable/dynamic page).
         stable_baseline = baseline_score <= _BOOL_LIKELY_THRESHOLD and baseline_len_ratio <= _BOOL_LEN_RATIO_THRESHOLD
 
         is_likely    = (score >= _BOOL_LIKELY_THRESHOLD
@@ -224,7 +246,7 @@ def _test_boolean(
             ))
             # Level 3: attempt data extraction via binary-search char extractor
             if opts.level >= 3 and confirmed:
-                from .extract import extract_value, get_extraction_targets
+                from ..extract import extract_value, get_extraction_targets
                 _dbms = getattr(opts, "dbms", "auto")
                 _surface = {"url": url, "method": method, "params": params,
                              "single_param": param,
@@ -277,7 +299,7 @@ def _test_union(
             continue
 
         if marker in resp:
-            # Guard 1: DB error reflection — the escaped payload in an SQL error.
+            # Guard 1: DB error reflection
             err_dbms, _ = _detect_db_error(resp)
             if err_dbms:
                 logger.debug(
@@ -286,11 +308,7 @@ def _test_union(
                     param, payload,
                 )
                 continue
-            # Guard 2: URL/path reflection — some apps echo the full URL or query
-            # string in a generic error page (e.g. "Unexpected path: ...MARKER...").
-            # In that case the marker is inside the injected value's URL encoding,
-            # not extracted by the UNION.  Detect by checking if the marker sits
-            # inside a <title> element or adjacent to the literal payload text.
+            # Guard 2: URL/path reflection
             if _is_path_reflected(resp, marker, payload):
                 logger.debug(
                     "Union probe: marker found but appears to be URL/path reflection, "
@@ -337,34 +355,20 @@ def _find_column_count(
                            second_url=second_url, json_body=json_body, path_index=path_index)
     baseline_words: set = set()
     if baseline_resp:
-        # Use a small set of non-trivial tokens from the baseline as a presence check
         baseline_words = set(w for w in baseline_resp.split() if len(w) > 4)
 
     # Per-prefix first-seen response — used as reference when the payload changes
-    # the injection context (e.g. ')) context returns empty results rather than
-    # echoing the baseline content, so the global baseline_words would misclassify
-    # a valid ORDER BY N as "bad").
+    # the injection context
     prefix_baseline: Dict[str, str] = {}
 
     def _get_prefix(payload: str) -> str:
-        """Extract the injection context prefix from a payload."""
         m2 = _re.match(r"^(['\"]?\)*)", payload)
         return m2.group(1) if m2 else ""
 
     def _response_looks_good(resp: str, prefix: str) -> bool:
-        """Return True if the response still contains expected content.
-
-        Uses a per-prefix baseline when available so that contexts that change
-        the result set (e.g. ')) that breaks out of a LIKE clause returns empty
-        rows) are compared against their own first-seen response rather than the
-        uninjected baseline.
-        """
         pb = prefix_baseline.get(prefix)
         if pb is None:
-            # No baseline yet for this prefix — treat no-error response as valid
-            # and record it as the baseline for future comparison.
             return True
-        # Compare against the first valid response seen for this prefix
         ref_words = set(w for w in pb.split() if len(w) > 4)
         if not ref_words:
             return True
@@ -373,9 +377,8 @@ def _find_column_count(
         return overlap >= 0.80
 
     seen_n: set = set()
-    # Per-prefix last_ok and confirmed-overflow tracking
     prefix_last_ok: Dict[str, int] = {}
-    prefix_overflow: set = set()  # prefixes where we've seen an overflow (N too large)
+    prefix_overflow: set = set()
 
     for raw_payload in probes:
         m = _re.search(r"ORDER BY (\d+)", raw_payload, _re.IGNORECASE)
@@ -384,7 +387,6 @@ def _find_column_count(
         n = int(m.group(1))
         prefix = _get_prefix(raw_payload)
 
-        # Skip prefixes that have already confirmed their column count
         if prefix in prefix_overflow:
             continue
 
@@ -398,7 +400,6 @@ def _find_column_count(
         looks_ok = not err_evidence and _response_looks_good(resp, prefix)
 
         if looks_ok:
-            # Record the first good response for this prefix as its baseline
             if prefix not in prefix_baseline:
                 prefix_baseline[prefix] = resp
             prefix_last_ok[prefix] = n
@@ -407,12 +408,9 @@ def _find_column_count(
         else:
             p_last = prefix_last_ok.get(prefix)
             if p_last is not None and n > p_last:
-                # This prefix has overflowed — record its column count
                 prefix_overflow.add(prefix)
 
-    # Return the column count from the prefix that gave the most columns
     if prefix_overflow:
-        # Prefer the confirmed (overflowed) prefix with highest last_ok
         best = max(
             (prefix_last_ok[p] for p in prefix_overflow if p in prefix_last_ok),
             default=None,
@@ -423,267 +421,21 @@ def _find_column_count(
     return last_ok
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _fetch(
-    injector: Injector,
-    url: str,
-    method: str,
-    params: Dict[str, str],
-    param: str,
-    value: Optional[str],
-    second_url: str = "",
-    json_body: bool = False,
-    path_index: int = 0,
-) -> Optional[str]:
-    """
-    Inject *value* into *param* and return response text, or None on error.
-
-    If *value* is ``None`` (baseline fetch), the original parameter value is
-    used unchanged — this keeps the baseline representative of normal app
-    behaviour for a valid input, rather than an empty/missing param which may
-    trigger a different code path (redirect, "no results", error page).
-
-    Otherwise the payload is **appended** to the existing parameter value.
-    This is essential for correct SQL injection: a payload like
-    ``' AND '1'='1`` is meaningless on its own — it needs to be attached to
-    the original value (e.g. ``1``) so the full injected string becomes
-    ``1' AND '1'='1``.
-
-    If *second_url* is provided, the injection is submitted to *url* (or the
-    POST target) but the response is read from *second_url* (GET).  This
-    supports two-step injection patterns like DVWA high-security SQLI where
-    the payload is submitted to a session-input page and the result is
-    rendered on a different page.
-    """
-    import urllib.parse as _up
-
-    # Resolve original param value (from URL query string for GET, from params dict otherwise)
-    if method.upper() == "GET":
-        qs = _up.parse_qs(_up.urlparse(url).query, keep_blank_values=True)
-        original = qs.get(param, [""])[0]
-    else:
-        original = params.get(param, "")
-
-    if value is None:
-        # Baseline: send the original value unmodified
-        injected_value = original
-    else:
-        # Inject: append payload to the original value
-        injected_value = original + value
-
-    injected = {**params, param: injected_value}
-
-    try:
-        if second_url:
-            # Two-step pattern: inject into url/POST, read result from second_url
-            if method.upper() == "POST":
-                if json_body:
-                    injector.post(url, json_body=injected)
-                else:
-                    injector.post(url, data=injected)
-            elif method.upper() == "PATH":
-                injector.inject_path(url, path_index, injected[param])
-            elif method.upper() == "COOKIE":
-                injector.inject_cookie(url, param, injected[param])
-            elif method.upper() == "HEADER":
-                injector.inject_header(url, param, injected[param])
-            else:
-                injector.inject_get(url, param, injected[param])
-            resp = injector.get(second_url)
-        elif method.upper() == "POST":
-            if json_body:
-                resp = injector.post(url, json_body=injected)
-            else:
-                resp = injector.post(url, data=injected)
-        elif method.upper() == "PATH":
-            resp = injector.inject_path(url, path_index, injected[param])
-        elif method.upper() == "COOKIE":
-            resp = injector.inject_cookie(url, param, injected[param])
-        elif method.upper() == "HEADER":
-            resp = injector.inject_header(url, param, injected[param])
-        else:
-            # For GET, rebuild the URL with the injected param value
-            resp = injector.inject_get(url, param, injected[param])
-
-        # Treat error HTTP status codes as non-injected responses to avoid
-        # false positives from WAF block pages (429, 503) or server errors (5xx).
-        if hasattr(resp, "status_code") and resp.status_code in (429, 503):
-            logger.debug(
-                "HTTP %d on %s param=%s — treating as baseline noise",
-                resp.status_code, url, param,
-            )
-            return None
-
-        return resp.text
-    except Exception as exc:
-        logger.debug("Request error for %s param=%s: %s", url, param, exc)
-        return None
-
-
-def _detect_db_error(body: str) -> Tuple[str, str]:
-    """
-    Scan *body* for DB error patterns.
-    Returns (dbms_name, evidence_snippet) or ("", "").
-    """
-    body_lower = body.lower()
-    # Check specific DBMSes first, then generic
-    for dbms in ("mysql", "mariadb", "mssql", "postgres", "sqlite", "oracle", "generic"):
-        for pattern in DB_ERROR_PATTERNS[dbms]:
-            m = re.search(pattern, body_lower)
-            if m:
-                start = max(0, m.start() - 30)
-                end   = min(len(body), m.end() + 80)
-                return dbms, body[start:end].strip()
-    return "", ""
-
-
-def _diff_score(a: str, b: str) -> float:
-    """
-    Return a similarity *distance* between two response bodies.
-    0.0 = identical, 1.0 = completely different.
-
-    Uses multiple signals:
-    1. SequenceMatcher over character runs (fast, catches large diffs)
-    2. Exclusive-line ratio: lines that appear in exactly one of the two responses.
-       This catches single changed lines in an otherwise-identical large HTML page
-       (e.g. boolean-blind "User ID exists" vs "User ID is MISSING").
-
-    The maximum of all signals is returned.
-    """
-    # Character-level ratio over first 4000 chars
-    char_ratio = difflib.SequenceMatcher(None, a[:4000], b[:4000]).ratio()
-    char_score = 1.0 - char_ratio
-
-    # Exclusive-line score: (|A-B| + |B-A|) / (|A| + |B|)
-    a_lines = set(a.splitlines())
-    b_lines = set(b.splitlines())
-    total_unique = len(a_lines) + len(b_lines)
-    if total_unique > 0:
-        exclusive = len(a_lines - b_lines) + len(b_lines - a_lines)
-        exclusive_score = exclusive / total_unique
-    else:
-        exclusive_score = 0.0
-
-    return max(char_score, exclusive_score)
-
-
-def _has_stable_boolean_signal(
-    baseline: str,
-    resp_true: str,
-    resp_false: str,
-) -> bool:
-    """
-    Return True when there is a reliable boolean divergence between
-    *resp_true* and *resp_false* that is NOT present between *baseline*
-    and *resp_true* (i.e. the true condition matches the baseline behaviour).
-
-    This covers the DVWA-style blind case where the true/false responses
-    differ in exactly one content line (e.g. "User ID exists" vs
-    "User ID is MISSING") while being otherwise byte-for-byte identical —
-    a difference too small for SequenceMatcher-based scoring to detect.
-    """
-    # Lines exclusively in resp_true but not resp_false (and not empty/whitespace)
-    true_lines  = set(l for l in resp_true.splitlines()  if l.strip())
-    false_lines = set(l for l in resp_false.splitlines() if l.strip())
-    base_lines  = set(l for l in baseline.splitlines()   if l.strip())
-
-    # We need at least one exclusive line on *each* side (true says X, false says Y)
-    true_exclusive  = true_lines  - false_lines
-    false_exclusive = false_lines - true_lines
-
-    if not true_exclusive or not false_exclusive:
-        return False
-
-    # The baseline should be stable relative to *one* of the two sides,
-    # confirming this is a data-dependent response (not a random/dynamic page).
-    # Case A: baseline looks like the "true" response (normal user exists)
-    if true_exclusive & base_lines:
-        return True
-    # Case B: baseline looks like the "false" response (empty/non-existent value)
-    if false_exclusive & base_lines:
-        return True
-    # Case C: baseline has no unique lines from either side — still confirm
-    # if true and false have symmetric exclusive lines (both sides diverge),
-    # but guard against dynamic pages (CSRF tokens, timestamps) by requiring:
-    # 1. Very few exclusive lines relative to total (CSRF tokens produce many)
-    # 2. The exclusive lines must not look like random tokens (length check)
-    # 3. The true/false pages must be broadly similar (not just random noise)
-    total_lines = max(len(true_lines), len(false_lines), 1)
-    if (len(true_exclusive) <= 3 and len(false_exclusive) <= 3
-            and len(true_exclusive) / total_lines < 0.10):
-        # Additional guard: reject if any exclusive line looks like a random token
-        # (short line containing only hex/alphanumeric — typical CSRF token pattern)
-        import re as _re
-        _token_re = _re.compile(r"[a-f0-9]{16,}|[A-Za-z0-9+/=]{24,}")
-        all_exclusive = true_exclusive | false_exclusive
-        has_token_lines = any(
-            _token_re.search(line.strip()) for line in all_exclusive
-        )
-        if not has_token_lines:
-            return True
-
-    return False
-
-
-def _len_ratio(a: str, b: str) -> float:
-    """
-    Return the relative content-length difference between two responses.
-    0.0 = same length, 1.0 = one is empty while the other is not.
-    Useful for detecting boolean-blind injections where the page adds/removes
-    a small snippet (e.g. "User ID exists" vs "User ID is MISSING").
-    """
-    la, lb = len(a), len(b)
-    if la == 0 and lb == 0:
-        return 0.0
-    return abs(la - lb) / max(la, lb)
-
-
-def _extract_marker(body: str, marker: str) -> str:
-    """Extract a snippet around the marker from the response body.
-
-    Returns up to 200 characters of context (10 before, 190 after) so that
-    meaningful SQL output (version strings, table names) is captured rather
-    than just the marker itself.
-    """
-    idx = body.find(marker)
-    if idx == -1:
-        return ""
-    return body[max(0, idx - 10): idx + len(marker) + 190]
-
-
-def _is_path_reflected(body: str, marker: str, payload: str) -> bool:
-    """Return True if the marker appears to be a URL/path reflection rather than
-    actual UNION output.
-
-    This guards against apps that echo the full request URL (or query string) in
-    a generic error page (e.g. "Unexpected path: /search?q=...MARKER...").  In
-    such cases the marker is part of the injected value's URL-encoded form, not
-    a SQL result.
-
-    Detection heuristics:
-    1. The marker is inside a ``<title>`` tag.
-    2. The marker immediately follows URL-encoded SQL characters (``%27``, ``%29``,
-       ``+UNION+``) — indicating the full payload was echoed verbatim.
-    """
-    import urllib.parse as _up
-    body_lower = body.lower()
-
-    # Heuristic 1: marker inside <title>
-    title_start = body_lower.find("<title>")
-    title_end   = body_lower.find("</title>")
-    if title_start != -1 and title_end != -1:
-        title_text = body[title_start:title_end]
-        if marker.lower() in title_text.lower():
-            return True
-
-    # Heuristic 2: payload echoed verbatim (URL-encoded form)
-    # Only fire if the URL-encoded form actually differs from the plain marker
-    # (i.e. the marker itself contains characters that get percent-encoded).
-    encoded_marker = _up.quote(marker)
-    if encoded_marker != marker and encoded_marker in body:
-        return True
-
-    return False
+__all__ = [
+    "scan_param",
+    # helpers
+    "_fetch",
+    "_diff_score",
+    "_len_ratio",
+    "_has_stable_boolean_signal",
+    "_extract_marker",
+    "_is_path_reflected",
+    # detection
+    "_detect_db_error",
+    "_test_error_based",
+    "_test_boolean",
+    "_test_union",
+    "_find_column_count",
+    # re-exported from payloads (for backward compat / patching)
+    "make_marker",
+]
