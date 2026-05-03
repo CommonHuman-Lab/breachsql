@@ -114,6 +114,33 @@ def print_summary(result) -> None:
             print()
             i += 1
 
+        for f in result.stacked:
+            print(f"  {i}. {RED('[STACKED QUERY SQLi]')} Confirmed")
+            print(f"     Param   : {f.parameter}")
+            print(f"     URL     : {f.url}")
+            print(f"     Method  : {f.method}")
+            print(f"     DBMS    : {f.dbms}")
+            print(f"     Payload : {f.payload}")
+            if f.evidence:
+                print(f"     Evidence: {DIM(f.evidence[:120])}")
+            if f.method.upper() == "GET":
+                print(f"     Proof   : {CYAN(_proof_url(f.url, f.parameter, f.payload))}")
+            print()
+            i += 1
+
+        if result.extracted:
+            print(f"  {GREEN('─' * 56)}")
+            print(f"  {GREEN(BOLD('  Extracted Data'))}")
+            print(f"  {GREEN('─' * 56)}")
+            for f in result.extracted:
+                print(f"  {i}. {GREEN('[EXTRACTED]')} via {f.mode}-blind")
+                print(f"     Param : {f.parameter}")
+                print(f"     URL   : {f.url}")
+                print(f"     Expr  : {DIM(f.expr)}")
+                print(f"     Value : {BOLD(f.value)}")
+                print()
+                i += 1
+
     if result.errors:
         print(RED("  Errors:"))
         for e in result.errors:

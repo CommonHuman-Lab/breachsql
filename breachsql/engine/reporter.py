@@ -174,7 +174,13 @@ class ScanResult:
     def append_union(self, f)         -> None: self._append("union_based", f)
     def append_oob(self, f)           -> None: self._append("oob", f)
     def append_stacked(self, f)       -> None: self._append("stacked", f)
-    def append_extraction(self, f)    -> None: self._append("extracted", f)
+    def append_extraction(self, f)    -> None:
+        with self._lock:
+            # Deduplicate: skip if we already have this (param, expr) pair
+            for existing in self.extracted:
+                if existing.parameter == f.parameter and existing.expr == f.expr:
+                    return
+            self.extracted.append(f)
     def append_error(self, msg: str)  -> None: self._append("errors", msg)
     def append_log(self, msg: str)    -> None: self._append("log", msg)
 
