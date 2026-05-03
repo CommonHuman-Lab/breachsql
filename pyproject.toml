@@ -54,6 +54,9 @@ packages = ["breachsql"]
 testpaths = ["tests"]
 addopts   = "-v"
 norecursedirs = ["breachsql", ".venv", "dist"]
+markers = [
+  "firerange: end-to-end tests that require the BreachSQL Fire Range (OctoRig lab 7)",
+]
 
 [tool.ruff]
 line-length = 100
