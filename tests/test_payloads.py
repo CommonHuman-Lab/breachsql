@@ -18,6 +18,10 @@ from breachsql.engine._scanner.payloads import (
     make_substring_payload,
     get_db_contents_payloads,
     get_stacked_payloads,
+    get_dios_payloads,
+    get_lfi_payloads,
+    get_privesc_payloads,
+    get_enum_payloads,
     apply_evasion,
     order_by_probes,
     union_null_probes,
@@ -162,17 +166,14 @@ class TestApplyEvasion:
 class TestUnionProbes:
     def test_order_by_count(self):
         probes = order_by_probes(max_cols=10)
-        # Eight variants per column count: string+dash, string+hash,
-        # single-paren+dash, single-paren+hash, double-paren+dash, double-paren+space-dash,
-        # numeric+dash, numeric+hash
-        assert len(probes) == 80
+        # 16 variants per column count (8 original + 8 WAF bypass)
+        assert len(probes) == 160
         assert "ORDER BY 1" in probes[0]
-        assert "ORDER BY 10" in probes[-1]
 
     def test_union_null_probes_count(self):
         probes = union_null_probes(col_count=3, marker="TESTMARKER")
-        # 3 positions × 3 variants (str literal, CAST, int-padded) × 8 comment/context combos = 72
-        assert len(probes) == 72
+        # 3 positions × 3 variants × (8 original + 8 WAF bypass) combos = 144
+        assert len(probes) == 144
 
     def test_union_null_probes_contain_marker(self):
         probes = union_null_probes(col_count=2, marker="MARK")
@@ -180,8 +181,9 @@ class TestUnionProbes:
 
     def test_union_null_probes_null_count(self):
         probes = union_null_probes(col_count=4, marker="M")
-        for p in probes:
-            # Each probe should have 4 columns total (NULL or marker)
+        # Only check probes that contain "UNION SELECT" (standard forms)
+        standard = [p for p in probes if "UNION SELECT" in p]
+        for p in standard:
             cols_part = p.split("UNION SELECT")[1]
             # Strip comment suffix (-- - or #)
             cols_part = cols_part.split("-- -")[0].split("#")[0]
@@ -363,3 +365,258 @@ class TestGetStackedPayloads:
 
     def test_xp_cmdshell_included_at_risk3(self):
         assert any("xp_cmdshell" in p.lower() for p in get_stacked_payloads("mssql", risk=3))
+
+
+# ---------------------------------------------------------------------------
+# WAF bypass detection payload variants
+# ---------------------------------------------------------------------------
+
+class TestWafBypassErrorPayloads:
+    def test_comment_terminator_variants_present(self):
+        generic = get_error_payloads("generic", risk=1)
+        assert any("--/**/-" in p for p in generic)
+        assert any("--%0A-" in p for p in generic)
+        assert any("--%23%0A-" in p for p in generic)
+        assert any("--%23foo%0D%0A-" in p for p in generic)
+
+    def test_waf_bypass_comment_count(self):
+        generic = get_error_payloads("generic", risk=1)
+        # At least the base set plus 14 WAF bypass comment terminators
+        assert len(generic) >= 30
+
+
+class TestWafBypassOrderBy:
+    def test_group_by_variant_present(self):
+        probes = order_by_probes(max_cols=2)
+        assert any("GROUP BY" in p for p in probes)
+
+    def test_comment_wrapped_order_by(self):
+        probes = order_by_probes(max_cols=2)
+        assert any("/**/ORDER/**/BY/**/" in p for p in probes)
+
+    def test_conditional_comment_order_by(self):
+        probes = order_by_probes(max_cols=2)
+        assert any("/*!ORDER BY*/" in p for p in probes)
+
+    def test_percent_encoded_newline_order_by(self):
+        probes = order_by_probes(max_cols=2)
+        assert any("%0Aorder%0Aby%0A" in p for p in probes)
+
+
+class TestWafBypassUnionSelect:
+    def test_union_all_select_present(self):
+        probes = union_null_probes(col_count=2, marker="M")
+        assert any("UNION ALL SELECT" in p for p in probes)
+
+    def test_distinctrow_present(self):
+        probes = union_null_probes(col_count=2, marker="M")
+        assert any("Distinctrow" in p for p in probes)
+
+    def test_and_null_union_present(self):
+        probes = union_null_probes(col_count=2, marker="M")
+        assert any("AnD null UNiON" in p for p in probes)
+
+    def test_and_false_union_present(self):
+        probes = union_null_probes(col_count=2, marker="M")
+        assert any("And False Union" in p for p in probes)
+
+
+class TestWafBypassTimePayloads:
+    def test_xor_sleep_variant(self):
+        payloads = get_time_payloads("mysql", delay=5)
+        assert any("XOR(if(now()=sysdate(),sleep(" in p for p in payloads)
+
+    def test_encoded_sleep_variant(self):
+        payloads = get_time_payloads("mysql", delay=5)
+        assert any("select*from(select(sleep(" in p for p in payloads)
+
+    def test_comment_xor_sleep_variant(self):
+        payloads = get_time_payloads("mysql", delay=5)
+        assert any("/**/xor/**/sleep(" in p for p in payloads)
+
+    def test_or_sleep_limit_variant(self):
+        payloads = get_time_payloads("mysql", delay=5)
+        assert any("or (sleep(" in p for p in payloads)
+
+
+class TestBooleanPairsAltAnd:
+    def test_char_zero_pair_present(self):
+        pairs = get_boolean_pairs(risk=1)
+        trues = [t for t, _ in pairs]
+        assert any("char(0)" in t for t in trues)
+
+    def test_mod_pair_present(self):
+        pairs = get_boolean_pairs(risk=1)
+        trues = [t for t, _ in pairs]
+        assert any("mod(29,9)" in t for t in trues)
+
+    def test_point_pair_present(self):
+        pairs = get_boolean_pairs(risk=1)
+        trues = [t for t, _ in pairs]
+        assert any("point(29,9)" in t for t in trues)
+
+    def test_false_union_pair_present(self):
+        pairs = get_boolean_pairs(risk=1)
+        trues = [t for t, _ in pairs]
+        assert any("False" in t and ("UNION" in t or "Union" in t) for t in trues)
+
+
+class TestGroupConcatDbContents:
+    def test_mysql_tables_has_group_concat(self):
+        payloads = get_db_contents_payloads("mysql", "tables")
+        assert any("GROUP_CONCAT" in p for p in payloads)
+
+    def test_mysql_columns_has_group_concat(self):
+        payloads = get_db_contents_payloads("mysql", "columns")
+        assert any("GROUP_CONCAT" in p for p in payloads)
+
+    def test_mariadb_tables_has_group_concat(self):
+        payloads = get_db_contents_payloads("mariadb", "tables")
+        assert any("GROUP_CONCAT" in p for p in payloads)
+
+    def test_mysql_waf_bypass_group_concat(self):
+        payloads = get_db_contents_payloads("mysql", "tables")
+        assert any("%53ELECT" in p or "%46ROM" in p for p in payloads)
+
+
+class TestDiosPayloads:
+    def test_returns_list(self):
+        payloads = get_dios_payloads()
+        assert isinstance(payloads, list)
+        assert len(payloads) >= 3
+
+    def test_contains_information_schema(self):
+        payloads = get_dios_payloads()
+        assert any("information_Schema" in p or "InFoRMAtiON_sCHeMa" in p for p in payloads)
+
+    def test_contains_concat(self):
+        payloads = get_dios_payloads()
+        assert any("concat" in p.lower() for p in payloads)
+
+
+class TestLfiPayloads:
+    def test_returns_list(self):
+        payloads = get_lfi_payloads()
+        assert isinstance(payloads, list)
+        assert len(payloads) >= 5
+
+    def test_contains_etc_passwd(self):
+        payloads = get_lfi_payloads()
+        assert any("/etc/passwd" in p or "6574632f706173737764" in p for p in payloads)
+
+    def test_contains_load_file(self):
+        payloads = get_lfi_payloads()
+        assert all("load_file" in p.lower() or "LOAD_FILE" in p for p in payloads)
+
+    def test_contains_to_base64(self):
+        payloads = get_lfi_payloads()
+        assert any("TO_base64" in p for p in payloads)
+
+
+class TestPrivescPayloads:
+    def test_returns_list(self):
+        payloads = get_privesc_payloads()
+        assert isinstance(payloads, list)
+        assert len(payloads) >= 4
+
+    def test_contains_user_privileges(self):
+        payloads = get_privesc_payloads()
+        assert any("USER_PRIVILEGES" in p for p in payloads)
+
+    def test_contains_file_priv(self):
+        payloads = get_privesc_payloads()
+        assert any("file_priv" in p for p in payloads)
+
+    def test_contains_path_discovery(self):
+        payloads = get_privesc_payloads()
+        assert any("@@datadir" in p or "@@tmpdir" in p for p in payloads)
+
+    def test_dumpfile_excluded_at_risk1(self):
+        payloads = get_privesc_payloads(risk=1)
+        assert not any("DUMPFILE" in p or "OUTFILE" in p for p in payloads)
+
+    def test_dumpfile_included_at_risk3(self):
+        payloads = get_privesc_payloads(risk=3)
+        assert any("DUMPFILE" in p or "OUTFILE" in p for p in payloads)
+
+    def test_super_priv_check_present(self):
+        payloads = get_privesc_payloads()
+        assert any("SUPER" in p or "Super_priv" in p for p in payloads)
+
+    def test_schema_privileges_present(self):
+        payloads = get_privesc_payloads()
+        assert any("schema_privileges" in p for p in payloads)
+
+    def test_hostname_present(self):
+        payloads = get_privesc_payloads()
+        assert any("@@hostname" in p for p in payloads)
+
+
+# ---------------------------------------------------------------------------
+# ENUM_PAYLOADS
+# ---------------------------------------------------------------------------
+
+class TestEnumPayloads:
+    def test_version_category(self):
+        payloads = get_enum_payloads("version")
+        assert len(payloads) >= 3
+        assert any("@@version" in p for p in payloads)
+
+    def test_current_user_category(self):
+        payloads = get_enum_payloads("current_user")
+        assert any("user()" in p for p in payloads)
+        assert any("system_user()" in p for p in payloads)
+
+    def test_hostname_category(self):
+        payloads = get_enum_payloads("hostname")
+        assert any("@@hostname" in p for p in payloads)
+
+    def test_current_database_category(self):
+        payloads = get_enum_payloads("current_database")
+        assert any("database()" in p for p in payloads)
+
+    def test_list_databases_category(self):
+        payloads = get_enum_payloads("list_databases")
+        assert any("schemata" in p for p in payloads)
+
+    def test_list_users_category(self):
+        payloads = get_enum_payloads("list_users")
+        assert any("mysql.user" in p or "user_privileges" in p for p in payloads)
+
+    def test_password_hashes_category(self):
+        payloads = get_enum_payloads("password_hashes")
+        assert any("password" in p.lower() or "authentication_string" in p for p in payloads)
+
+    def test_find_tables_by_column_category(self):
+        payloads = get_enum_payloads("find_tables_by_column")
+        assert any("column_name" in p and "TARGET_COLUMN" in p for p in payloads)
+
+    def test_conditional_category_if(self):
+        payloads = get_enum_payloads("conditional")
+        assert any("IF(" in p for p in payloads)
+
+    def test_conditional_category_case_when(self):
+        payloads = get_enum_payloads("conditional")
+        assert any("CASE WHEN" in p for p in payloads)
+
+    def test_unknown_category_returns_empty(self):
+        assert get_enum_payloads("nonexistent") == []
+
+
+class TestBooleanPairsConditional:
+    def test_if_pair_present(self):
+        pairs = get_boolean_pairs(risk=1)
+        trues = [t for t, _ in pairs]
+        assert any("IF(1=1" in t for t in trues)
+
+    def test_case_when_pair_present(self):
+        pairs = get_boolean_pairs(risk=1)
+        trues = [t for t, _ in pairs]
+        assert any("CASE WHEN" in t for t in trues)
+
+    def test_if_pair_differs(self):
+        # True form uses 1=1, false form uses 1=2
+        pairs = get_boolean_pairs(risk=1)
+        if_pairs = [(t, f) for t, f in pairs if "IF(" in t]
+        for t, f in if_pairs:
+            assert t != f
