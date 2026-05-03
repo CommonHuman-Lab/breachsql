@@ -36,7 +36,7 @@ class Injector:
   - configurable proxy, headers, cookies
   - automatic retry on transient errors
   - request counter (exposed on scan result)
-  - GET/POST helpers for XSS injection
+  - GET/POST helpers for parameter injection
   """
 
   def __init__(
@@ -104,7 +104,7 @@ class Injector:
     return self._session.head(url, timeout=self.timeout, allow_redirects=True, **kwargs)
 
   # -------------------------------------------------------------------------
-  # XSS injection helpers
+  # Injection helpers
   # -------------------------------------------------------------------------
 
   def inject_get(self, url: str, param: str, payload: str) -> Response:
@@ -115,20 +115,6 @@ class Injector:
     new_qs  = up.urlencode(qs, doseq=True)
     target  = up.urlunparse(parsed._replace(query=new_qs))
     return self.get(target)
-
-  def inject_post(self, url: str, param: str, payload: str,
-                  base_data: Optional[Dict[str, str]] = None) -> Response:
-    """Inject `payload` as the value of `param` in a POST body."""
-    data = dict(base_data or {})
-    data[param] = payload
-    return self.post(url, data=data)
-
-  def inject_post_json(self, url: str, param: str, payload: str,
-                       base_data: Optional[Dict[str, Any]] = None) -> Response:
-    """Inject into a JSON POST body."""
-    body = dict(base_data or {})
-    body[param] = payload
-    return self.post(url, json_body=body)
 
   def inject_path(self, url: str, segment_index: int, payload: str) -> Response:
     """Inject `payload` into a URL path segment by position index.
@@ -152,26 +138,6 @@ class Injector:
   def inject_header(self, url: str, header_name: str, payload: str) -> Response:
     """Inject `payload` as the value of a custom HTTP request header."""
     return self.get(url, headers={header_name: payload})
-
-  def probe_header_reflection(
-    self, url: str, header_name: str, marker: str
-  ) -> tuple[bool, Response]:
-    """Probe whether `marker` injected via `header_name` is reflected.
-
-    Delegates to :func:`breachsql.engine.http.reflection.probe_header_reflection`.
-    """
-    from .reflection import probe_header_reflection
-    return probe_header_reflection(self, url, header_name, marker)
-
-  def probe_reflection(self, url: str, param: str, marker: str,
-                       method: str = "GET",
-                       base_data: Optional[Dict[str, str]] = None) -> Tuple[bool, Response]:
-    """Send a reflection probe for `marker` on `param`.
-
-    Delegates to :func:`breachsql.engine.http.reflection.probe_reflection`.
-    """
-    from .reflection import probe_reflection
-    return probe_reflection(self, url, param, marker, method, base_data)
 
   # -------------------------------------------------------------------------
   # URL utilities
