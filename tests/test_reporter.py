@@ -15,6 +15,7 @@ from breachsql.engine.reporter import (
     TimeFinding,
     UnionFinding,
     OOBFinding,
+    StackedFinding,
     FindingType,
     _FINDING_LISTS,
 )
@@ -158,3 +159,26 @@ class TestToDict:
         r = _make_result()
         for attr, _ in _FINDING_LISTS:
             assert hasattr(r, attr), f"ScanResult missing attribute: {attr}"
+
+
+class TestStackedFinding:
+    def test_append_stacked(self):
+        r = _make_result()
+        r.append_stacked(StackedFinding(
+            url="https://x.com/?id=1", parameter="id", method="GET",
+            payload="'; SELECT 1-- -", dbms="mssql", evidence="<html>Changed</html>",
+        ))
+        assert len(r.stacked) == 1
+        assert r.total_findings == 1
+
+    def test_stacked_serialised_in_to_dict(self):
+        r = _make_result()
+        r.append_stacked(StackedFinding(
+            url="https://x.com/", parameter="id", method="GET",
+            payload="'; SELECT 1-- -", dbms="mssql", evidence="",
+        ))
+        stacked = [f for f in r.to_dict()["findings"] if f["type"] == "stacked_sqli"]
+        assert len(stacked) == 1
+
+    def test_finding_type_value(self):
+        assert FindingType.STACKED.value == "stacked_sqli"

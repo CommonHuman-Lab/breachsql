@@ -20,6 +20,7 @@ from .options import ScanOptions
 from .passive import fetch_seed, run_passive_checks
 from .active import scan_param
 from .blind import run_time_based, run_oob
+from .stacked import run_stacked
 
 logger = get_logger("breachsql.pipeline")
 
@@ -165,3 +166,12 @@ def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> 
                     f.result()
                 except Exception as exc:
                     result.append_error(str(exc))
+
+    # 7. Stacked (batched) queries (sequential — order matters for detection)
+    if opts.use_stacked:
+        logger.info("Running stacked query detection (%d surfaces)", len(surfaces))
+        for surface in surfaces:
+            try:
+                run_stacked(surface, evasions, opts, injector, result)
+            except Exception as exc:
+                result.append_error(str(exc))

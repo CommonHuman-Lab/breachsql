@@ -11,6 +11,7 @@ from .reporter import (
     TimeFinding,
     UnionFinding,
     OOBFinding,
+    StackedFinding,
     FindingType,
     ScanResult,
 )
@@ -26,4 +27,5 @@ __all__ = [
     "TimeFinding",
     "UnionFinding",
     "OOBFinding",
+    "StackedFinding",
 ]

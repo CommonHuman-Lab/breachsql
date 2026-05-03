@@ -58,7 +58,7 @@ class ScanOptions:
         if unknown_chars:
             warnings.warn(
                 f"Unknown technique letter(s) ignored: {''.join(sorted(unknown_chars))}. "
-                f"Valid letters are: E B T U O",
+                f"Valid letters are: E B T U S O",
                 UserWarning,
                 stacklevel=2,
             )

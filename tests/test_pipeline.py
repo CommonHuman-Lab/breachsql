@@ -221,3 +221,36 @@ class TestPipelinePathParams:
         with patch("breachsql.engine._scanner.pipeline.scan_param") as mock_scan:
             run("https://x.com/search", opts, injector, result)
             assert mock_scan.call_count == 0
+
+
+@patch("breachsql.engine._scanner.pipeline.waf_detect")
+@patch("breachsql.engine._scanner.pipeline.fetch_seed", return_value=None)
+@patch("breachsql.engine._scanner.pipeline.run_passive_checks")
+class TestStackedTechniqueGating:
+    def test_stacked_not_run_without_s_flag(self, mock_passive, mock_seed, mock_waf):
+        """run_stacked must not be called when 'S' is absent from the technique."""
+        from breachsql.engine.http.waf_detect import WafResult, EVASION_NONE
+        mock_waf.detect.return_value = WafResult(
+            detected=False, name="", confidence=0.0, evasions=[EVASION_NONE],
+        )
+        injector = _mock_injector(params=["id"])
+        opts = ScanOptions(technique="E", dbms="mssql")
+        result = ScanResult(target="https://x.com/?id=1")
+
+        with patch("breachsql.engine._scanner.pipeline.run_stacked") as mock_stacked:
+            run("https://x.com/?id=1", opts, injector, result)
+            mock_stacked.assert_not_called()
+
+    def test_stacked_run_with_s_flag(self, mock_passive, mock_seed, mock_waf):
+        """run_stacked must be called for each surface when 'S' is in technique."""
+        from breachsql.engine.http.waf_detect import WafResult, EVASION_NONE
+        mock_waf.detect.return_value = WafResult(
+            detected=False, name="", confidence=0.0, evasions=[EVASION_NONE],
+        )
+        injector = _mock_injector(params=["id"])
+        opts = ScanOptions(technique="S", dbms="mssql")
+        result = ScanResult(target="https://x.com/?id=1")
+
+        with patch("breachsql.engine._scanner.pipeline.run_stacked") as mock_stacked:
+            run("https://x.com/?id=1", opts, injector, result)
+            mock_stacked.assert_called()
