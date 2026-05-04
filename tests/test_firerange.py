@@ -796,3 +796,102 @@ def test_sq2i_json_body(firerange):
         risk=1,
     )
     assert result.total_findings > 0, _msg(result)
+
+
+# ===========================================================================
+# M Y S Q L — additional challenges (my1d, my1e, my4k, my5d)
+# ===========================================================================
+
+@pytest.mark.firerange
+def test_my1d_version_union(firerange):
+    """MY1-D: UNION extraction of @@version from my1/users."""
+    result = _scan(
+        f"{firerange}/challenges/my1/users?id=1",
+        dbms="mysql", technique="U", level=2, risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_my1e_type_mismatch(firerange):
+    """MY1-E: Error-based type-cast injection on my1/typecheck."""
+    result = _scan(
+        f"{firerange}/challenges/my1/typecheck?username=admin",
+        dbms="mysql", technique="E", risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_my4k_double_lock(firerange):
+    """MY4-K: Compound WAF bypass (double-filter) on my4/doublelock."""
+    result = _scan(
+        f"{firerange}/challenges/my4/doublelock?id=1",
+        dbms="mysql", technique="E", risk=2,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+@pytest.mark.skip(reason="my5d is an OOB/file-read teaser — not reachable by an active scanner")
+def test_my5d_outbound(firerange):
+    """MY5-D: OOB / file-read teaser — out of scope for automated scanning."""
+    pass
+
+
+# ===========================================================================
+# P O S T G R E S Q L — additional challenges (pg1c, pg4c)
+# ===========================================================================
+
+@pytest.mark.firerange
+def test_pg1c_version_union(firerange):
+    """PG1-C: UNION extraction of version() from pg/users."""
+    result = _scan(
+        f"{firerange}/challenges/pg/users?id=1",
+        dbms="postgres", technique="U", level=2, risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_pg4c_hidden_crawl(firerange):
+    """PG4-C: Hidden endpoint discovered via token param — error-based confirmation."""
+    result = _scan(
+        f"{firerange}/challenges/pg/hidden?token=secret",
+        dbms="postgres", technique="E", risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+# ===========================================================================
+# S Q L I T E — additional challenges (sq2j, sq2k, sq3b)
+# ===========================================================================
+
+@pytest.mark.firerange
+def test_sq2j_no_space_bypass(firerange):
+    """SQ2-J: Space-stripping WAF bypass with /**/ comments on SQLite."""
+    result = _scan(
+        f"{firerange}/challenges/sq/nospace?id=1",
+        dbms="sqlite", technique="E", risk=2,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_sq2k_char_quote_evade(firerange):
+    """SQ2-K: Single-quote WAF bypass via CHAR() on SQLite."""
+    result = _scan(
+        f"{firerange}/challenges/sq/quotefilter?id=1",
+        dbms="sqlite", technique="E", risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
+
+
+@pytest.mark.firerange
+def test_sq3b_hidden_crawl(firerange):
+    """SQ3-B: Hidden endpoint discovered via token param — error-based confirmation on SQLite."""
+    result = _scan(
+        f"{firerange}/challenges/sq/hidden?token=secret",
+        dbms="sqlite", technique="E", risk=1,
+    )
+    assert result.total_findings > 0, _msg(result)
