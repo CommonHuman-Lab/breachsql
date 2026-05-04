@@ -19,7 +19,7 @@ _BOOL_CONFIRM_THRESHOLD = 0.20
 # diff score threshold above which we flag it as likely (lower confidence)
 _BOOL_LIKELY_THRESHOLD  = 0.10
 # content-length ratio difference that alone signals a boolean response divergence
-_BOOL_LEN_RATIO_THRESHOLD = 0.02  # 2% length difference
+_BOOL_LEN_RATIO_THRESHOLD = 0.02
 
 
 def _fetch(
@@ -108,10 +108,24 @@ def _fetch(
             )
             return None
 
-        return resp.text
+        # Prepend the HTTP status code so that boolean detectors can see
+        # status-code-based signals (e.g. 200 vs 404 as true/false indicator).
+        # We use a sentinel prefix format that won't appear in normal responses.
+        status_prefix = ""
+        if hasattr(resp, "status_code"):
+            status_prefix = f"__HTTP_STATUS_{resp.status_code}__\n"
+        return status_prefix + resp.text
     except Exception as exc:
         logger.debug("Request error for %s param=%s: %s", url, param, exc)
         return None
+
+
+_STATUS_SENTINEL_RE = re.compile(r"^__HTTP_STATUS_\d+__\n", re.MULTILINE)
+
+
+def strip_status_sentinel(text: str) -> str:
+    """Remove the HTTP status sentinel prefix added by _fetch before storing evidence."""
+    return _STATUS_SENTINEL_RE.sub("", text, count=1)
 
 
 def _diff_score(a: str, b: str) -> float:

@@ -19,9 +19,7 @@ from .payloads import apply_evasion, get_time_payloads, get_oob_payloads
 
 logger = get_logger("breachsql.blind")
 
-# Safety cap: never inject more than this many time-based payloads per parameter.
-# Time-based is inherently slow — keep it tight.
-_MAX_TIME_PAYLOADS = 4
+_MAX_TIME_PAYLOADS = 12
 
 
 def run_time_based(

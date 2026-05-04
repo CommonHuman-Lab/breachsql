@@ -110,6 +110,13 @@ DB_ERROR_PATTERNS: dict[str, List[str]] = {
         r"unclosed quotation mark",
         r"extractvalue\(",
         r"updatexml\(",
+        r"unknown column",
+        r"42s22",
+        r"42000",
+        r"\b1054\b",
+        r"\b1064\b",
+        r"different number of columns",
+        r"21000",
     ],
     "mariadb": [
         r"mariadb.*error",
@@ -134,6 +141,8 @@ DB_ERROR_PATTERNS: dict[str, List[str]] = {
         r"unterminated quoted string at or near",
         r"syntax error at or near",
         r"division by zero",
+        r"order by term out of range",
+        r"position \d+ is not in select list",
     ],
     "sqlite": [
         r"sqlite.*error",
@@ -141,6 +150,9 @@ DB_ERROR_PATTERNS: dict[str, List[str]] = {
         r"sqlite_step\(\)",
         r"near \".*\": syntax error",
         r"unrecognized token",
+        r"order by term out of range",
+        r"no such column",
+        r"ambiguous column name",
     ],
     "oracle": [
         r"ora-\d{5}",

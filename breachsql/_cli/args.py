@@ -101,10 +101,10 @@ def interactive_prompts() -> argparse.Namespace:
 
     crawl = _prompt_bool("  Enable crawler", default=False)
     if crawl:
-        max_pages_str = _prompt("  Max pages", default="50")
+        max_pages_str = _prompt("  Max pages", default="100")
         max_depth_str = _prompt("  Max depth", default="3")
     else:
-        max_pages_str = "50"
+        max_pages_str = "100"
         max_depth_str = "3"
     print()
 
@@ -120,7 +120,7 @@ def interactive_prompts() -> argparse.Namespace:
         timeout=_safe_int(timeout_str, 15, 5, 120),
         delay=0.0,
         level=_safe_int(level_str, 1, 1, 3),
-        max_pages=_safe_int(max_pages_str, 50, 1, 500),
+        max_pages=_safe_int(max_pages_str, 100, 1, 500),
         max_depth=_safe_int(max_depth_str, 3, 1, 10),
         exclude=[],
         output="",
@@ -169,8 +169,8 @@ def build_parser() -> argparse.ArgumentParser:
     # --- Scan depth ---
     p.add_argument("--level",     type=int, default=1, choices=[1, 2, 3],
                    help="Scan depth: 1=fast 2=thorough 3=deep (default 1)")
-    p.add_argument("--max-pages", type=int, default=50,
-                   help="Max pages to crawl (default 50)")
+    p.add_argument("--max-pages", type=int, default=100,
+                   help="Max pages to crawl (default 100)")
     p.add_argument("--max-depth", type=int, default=3,
                    help="Max crawl depth (default 3)")
     p.add_argument("--exclude",   action="append", default=[], metavar="PATTERN",

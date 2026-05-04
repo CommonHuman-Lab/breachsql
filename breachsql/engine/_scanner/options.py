@@ -22,7 +22,7 @@ class ScanOptions:
         threads:          int               = 5,
         timeout:          int               = 15,
         level:            int               = 1,
-        max_pages:        int               = 50,
+        max_pages:        int               = 100,
         max_depth:        int               = 3,
         delay:            float             = 0.0,
         output:           str               = "",
