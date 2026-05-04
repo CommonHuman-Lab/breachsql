@@ -111,7 +111,7 @@ for f in result.error_based:
 
 ## Fire Range
 
-The **BreachSQL Fire Range** is a deliberately vulnerable Flask + MySQL + PostgreSQL + SQLite app that ships with [OctoRig](https://github.com/CommonHuman-Lab/OctoRig) (lab slot 7). It provides 37 injectable endpoints that the scanner is verified against on every change.
+The **BreachSQL Fire Range** is a deliberately vulnerable Flask + MySQL + PostgreSQL + SQLite app that ships with [OctoRig](https://github.com/CommonHuman-Lab/OctoRig) (lab slot 7). It provides injectable endpoints that the scanner is verified against on every change.
 
 ```bash
 # Start the Fire Range (OctoRig required)
@@ -120,8 +120,6 @@ The **BreachSQL Fire Range** is a deliberately vulnerable Flask + MySQL + Postgr
 # Run the full end-to-end test suite
 pytest tests/test_firerange.py -v
 ```
-
-63 tests — all injectable challenges plus sanity, flag submission, and technique variant checks.
 
 → [Fire Range README](https://github.com/CommonHuman-Lab/OctoRig/tree/main/labs/firerange)
 
