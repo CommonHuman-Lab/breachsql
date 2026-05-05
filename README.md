@@ -93,6 +93,8 @@ for f in result.error_based:
 
 | Option | Default | Description |
 |--------|---------|-------------|
+| `-u` | — | Target to use |
+| `--crawl` | — | Crawl target |
 | `--dbms` | auto | Target backend: `mysql`, `mariadb`, `postgres`, `sqlite`, `mssql`, `oracle` |
 | `-t` / `--technique` | `EBTUS` | Techniques to run (any combo of E B T U S) |
 | `--level` | `1` | Payload depth: 1 = standard, 2 = extended, 3 = extended + data extraction |
@@ -106,6 +108,7 @@ for f in result.error_based:
 | `--second-url` | — | Read URL for two-step injection |
 | `--timeout` | `10` | Per-request timeout in seconds |
 | `-o` | — | Write findings to JSON file |
+
 
 ---
 
