@@ -166,6 +166,9 @@ _GENERIC_BLOCK_BODIES = [
     r"Security violation",
     r"Illegal request",
     r"Attack detected",
+    # Inline WAF responses that return 200 OK with a block message in the body
+    r"WAF:\s*BLOCKED",
+    r"WAF caught",
 ]
 
 # SQLi probe — triggers most SQL-aware WAFs
@@ -223,25 +226,41 @@ def detect(injector, url: str, param: Optional[str] = None) -> WafResult:
             confidence=confidence,
         )
 
-    if resp.status_code in (403, 406, 429, 503):
+    _body_blocked = any(re.search(p, body, re.IGNORECASE) for p in _GENERIC_BLOCK_BODIES)
+    if resp.status_code in (403, 406, 429, 503) or _body_blocked:
+        if _body_blocked and resp.status_code < 400:
+            return WafResult(
+                detected=True,
+                name="Generic WAF (inline body block — double-encode bypass likely)",
+                evasions=[EVASION_SQL_COMMENT, EVASION_SQL_CASE, EVASION_DOUBLE_ENCODE],
+                confidence="medium",
+            )
+        # Hard block (4xx): probe with double-encoded payload — if it bypasses,
+        # the WAF inspects the raw URL before decoding.
+        try:
+            double_enc_payload = up.quote(up.quote(_PROBE_PAYLOAD, safe=""), safe="")
+            if param:
+                de_url = _inject_param(url, param, double_enc_payload)
+            else:
+                sep = "&" if "?" in url else "?"
+                de_url = f"{url}{sep}q={double_enc_payload}"
+            de_resp = injector.get(de_url)
+            _de_body_blocked = any(re.search(p, de_resp.text, re.IGNORECASE) for p in _GENERIC_BLOCK_BODIES)
+            if de_resp.status_code < 400 and not _de_body_blocked:
+                return WafResult(
+                    detected=True,
+                    name="Generic WAF (double-encode bypass)",
+                    evasions=[EVASION_DOUBLE_ENCODE, EVASION_SQL_COMMENT, EVASION_SQL_CASE],
+                    confidence="medium",
+                )
+        except Exception:
+            pass
         return WafResult(
             detected=True,
             name="Generic WAF",
-            evasions=[
-                EVASION_SQL_COMMENT, EVASION_SQL_CASE,
-                EVASION_CASE_MIXING, EVASION_HTML_ENCODE,
-            ],
+            evasions=[EVASION_SQL_COMMENT, EVASION_SQL_CASE, EVASION_CASE_MIXING, EVASION_HTML_ENCODE],
             confidence="low",
         )
-
-    for pattern in _GENERIC_BLOCK_BODIES:
-        if re.search(pattern, body, re.IGNORECASE):
-            return WafResult(
-                detected=True,
-                name="Generic WAF",
-                evasions=[EVASION_SQL_COMMENT, EVASION_SQL_CASE, EVASION_CASE_MIXING],
-                confidence="low",
-            )
 
     return WafResult(detected=False, name=None, evasions=[EVASION_NONE], confidence="none")
 
