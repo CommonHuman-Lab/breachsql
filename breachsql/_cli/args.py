@@ -3,53 +3,20 @@
 from __future__ import annotations
 
 import argparse
-import sys
 
-from breachsql._cli.colour import BOLD, CYAN, DIM, YELLOW, BANNER
+from commonhuman_cli.colour import CYAN, DIM, YELLOW
+from commonhuman_cli.prompts import (
+    safe_int as _safe_int,
+    prompt as _prompt,
+    prompt_bool as _prompt_bool,
+    section as _section,
+)
 
 try:
-    from breachsql import __version__
+    from breachsql import __version__, BANNER
 except ImportError:
     __version__ = "0.1.0"
-
-
-def _safe_int(val: str, default: int, lo: int, hi: int) -> int:
-    try:
-        return max(lo, min(int(val), hi))
-    except (TypeError, ValueError):
-        return default
-
-
-def _prompt(label: str, default: str = "", hint: str = "") -> str:
-    hint_str = f"  {DIM(hint)}" if hint else ""
-    if default:
-        display = f"{BOLD(label)} {DIM(f'[{default}]')}{hint_str}: "
-    else:
-        display = f"{BOLD(label)}{hint_str}: "
-    try:
-        val = input(display).strip()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        sys.exit(0)
-    return val if val else default
-
-
-def _prompt_bool(label: str, default: bool = False) -> bool:
-    default_str = "Y/n" if default else "y/N"
-    display = f"{BOLD(label)} {DIM(f'[{default_str}]')}: "
-    try:
-        val = input(display).strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        sys.exit(0)
-    if not val:
-        return default
-    return val in ("y", "yes", "1", "true")
-
-
-def _section(title: str) -> None:
-    print()
-    print(DIM("  ─── " + title + " " + "─" * max(0, 40 - len(title))))
+    BANNER = ""
 
 
 def interactive_prompts() -> argparse.Namespace:

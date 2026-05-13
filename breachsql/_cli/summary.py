@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import urllib.parse as _up
 
-from breachsql._cli.colour import BOLD, CYAN, DIM, GREEN, RED, YELLOW
+from commonhuman_cli.colour import BOLD, CYAN, DIM, GREEN, RED, YELLOW
 
 
 def _proof_url(url: str, param: str, payload: str, original: str = "1") -> str:

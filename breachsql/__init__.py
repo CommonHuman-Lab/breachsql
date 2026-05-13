@@ -25,7 +25,18 @@ from breachsql.engine.reporter import (
     FindingType,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
+
+BANNER = r"""
+  ____                      _      ____   ___  _
+ | __ ) _ __ ___  __ _  ___| |__  / ___| / _ \| |
+ |  _ \| '__/ _ \/ _` |/ __| '_ \ \___ \| | | | |
+ | |_) | | |  __/ (_| | (__| | | | ___) | |_| | |___
+ |____/|_|  \___|\__,_|\___|_| |_||____/ \__\_\_____|
+
+  Every query has a crack.
+  SQL Injection Engine — CommonHuman-Lab
+"""
 
 __all__ = [
     "__version__",

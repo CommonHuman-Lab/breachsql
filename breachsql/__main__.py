@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 
 _HERE   = os.path.dirname(os.path.abspath(__file__))
@@ -22,12 +21,16 @@ for _p in (_PARENT, _HERE):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+from breachsql import BANNER
 from breachsql.engine import scan, ScanOptions
 from breachsql.engine.log import get_logger
-from breachsql._cli.colour import BOLD, CYAN, YELLOW, BANNER
-from breachsql._cli.logging import setup_logging
 from breachsql._cli.args import build_parser, interactive_prompts
 from breachsql._cli.summary import print_summary
+from commonhuman_cli.colour import BOLD, CYAN
+from commonhuman_cli.logging import setup_logging
+from commonhuman_cli.entrypoint import (
+    load_url_list, compile_exclude_patterns, parse_headers, validate_timeout,
+)
 
 _cli_logger = get_logger("breachsql")
 
@@ -43,22 +46,14 @@ def main() -> None:
     parser = build_parser()
     args   = parser.parse_args()
 
-    setup_logging(verbose=args.verbose, quiet=args.quiet or args.json_output)
+    setup_logging(verbose=args.verbose, quiet=args.quiet or args.json_output, logger_name="breachsql")
 
     # Collect target URLs
     urls: list[str] = []
     if args.url:
         urls.append(args.url)
     if args.url_list:
-        try:
-            with open(args.url_list) as fh:
-                for line in fh:
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        urls.append(line)
-        except OSError as e:
-            print(f"[!] Cannot read URL list: {e}", file=sys.stderr)
-            sys.exit(2)
+        urls.extend(load_url_list(args.url_list))
 
     # No URL supplied → interactive mode
     if not urls:
@@ -67,25 +62,10 @@ def main() -> None:
     elif not args.json_output:
         print(CYAN(BANNER))
 
-    if hasattr(args, "timeout") and args.timeout < 5:
-        print(YELLOW(f"[!] --timeout {args.timeout} is below minimum; clamping to 5s"),
-              file=sys.stderr)
+    validate_timeout(args.timeout)
 
-    # Compile exclude patterns
-    exclude_patterns: list[re.Pattern] = []
-    for pat in args.exclude:
-        try:
-            exclude_patterns.append(re.compile(pat))
-        except re.error as e:
-            print(f"[!] Invalid --exclude pattern '{pat}': {e}", file=sys.stderr)
-            sys.exit(2)
-
-    # Parse headers
-    headers: dict[str, str] = {}
-    for h in args.header:
-        if ":" in h:
-            k, _, v = h.partition(":")
-            headers[k.strip()] = v.strip()
+    exclude_patterns = compile_exclude_patterns(args.exclude)
+    headers          = parse_headers(args.header)
 
     opts = ScanOptions(
         crawl=args.crawl,

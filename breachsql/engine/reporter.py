@@ -5,11 +5,11 @@
 from __future__ import annotations
 
 import dataclasses
-import threading
-import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
+
+from commonhuman_cli.reporter import ScanResultBase
 
 
 # ---------------------------------------------------------------------------
@@ -37,8 +37,8 @@ class ErrorBasedFinding:
     parameter: str
     method:    str
     payload:   str
-    dbms:      str          # detected DBMS name or "unknown"
-    evidence:  str = ""     # snippet of the error message from the response
+    dbms:      str
+    evidence:  str = ""
 
 
 @dataclass
@@ -49,8 +49,8 @@ class BooleanFinding:
     method:        str
     payload_true:  str
     payload_false: str
-    diff_score:    float    # 0.0–1.0 similarity distance; higher = more different
-    confirmed:     bool     # True if diff_score exceeds high-confidence threshold
+    diff_score:    float
+    confirmed:     bool
     evidence:      str = ""
 
 
@@ -62,8 +62,8 @@ class TimeFinding:
     method:         str
     payload:        str
     dbms:           str
-    observed_delay: float   # seconds the response actually took
-    threshold:      int     # configured threshold in seconds
+    observed_delay: float
+    threshold:      int
 
 
 @dataclass
@@ -74,7 +74,7 @@ class UnionFinding:
     method:       str
     payload:      str
     column_count: int
-    extracted:    str = ""  # data extracted via the UNION column
+    extracted:    str = ""
 
 
 @dataclass
@@ -85,7 +85,7 @@ class OOBFinding:
     method:       str
     payload:      str
     callback_url: str
-    confirmed:    bool = False   # Always False until external callback is verified
+    confirmed:    bool = False
 
 
 @dataclass
@@ -96,7 +96,7 @@ class StackedFinding:
     method:    str
     payload:   str
     dbms:      str
-    evidence:  str = ""  # first 200 chars of the diverged response
+    evidence:  str = ""
 
 
 @dataclass
@@ -105,9 +105,9 @@ class ExtractionFinding:
     url:       str
     parameter: str
     method:    str
-    expr:      str    # SQL expression that was extracted
-    value:     str    # extracted string value
-    mode:      str    # "boolean" or "time"
+    expr:      str
+    value:     str
+    mode:      str
 
 
 # ---------------------------------------------------------------------------
@@ -130,24 +130,9 @@ _FINDING_LISTS: List[tuple[str, FindingType]] = [
 # ---------------------------------------------------------------------------
 
 @dataclass
-class ScanResult:
-    # Meta
-    target:      str
-    started_at:  float = field(default_factory=time.time)
-    finished_at: float = 0.0
-    duration_s:  float = 0.0
-
-    # WAF
-    waf_detected:    Optional[str] = None
-    evasion_applied: Optional[str] = None
-
-    # DBMS (auto-detected during scan)
+class ScanResult(ScanResultBase):
+    # DBMS (auto-detected during scan) — BreachSQL-specific
     dbms_detected: Optional[str] = None
-
-    # Stats
-    crawled_urls:  int = 0
-    params_tested: int = 0
-    requests_sent: int = 0
 
     # Findings
     error_based:   List[ErrorBasedFinding] = field(default_factory=list)
@@ -158,16 +143,7 @@ class ScanResult:
     stacked:       List[StackedFinding]    = field(default_factory=list)
     extracted:     List[ExtractionFinding] = field(default_factory=list)
 
-    log:    List[str] = field(default_factory=list)
-    errors: List[str] = field(default_factory=list)
-
-    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
-
     # --- Append helpers -------------------------------------------------------
-
-    def _append(self, attr: str, finding: Any) -> None:
-        with self._lock:
-            getattr(self, attr).append(finding)
 
     def append_error_based(self, f)   -> None: self._append("error_based", f)
     def append_boolean(self, f)       -> None: self._append("boolean_based", f)
@@ -175,30 +151,19 @@ class ScanResult:
     def append_union(self, f)         -> None: self._append("union_based", f)
     def append_oob(self, f)           -> None: self._append("oob", f)
     def append_stacked(self, f)       -> None: self._append("stacked", f)
-    def append_extraction(self, f)    -> None:
+
+    def append_extraction(self, f) -> None:
         with self._lock:
-            # Deduplicate: skip if we already have this (param, expr) pair
             for existing in self.extracted:
                 if existing.parameter == f.parameter and existing.expr == f.expr:
                     return
             self.extracted.append(f)
-    def append_error(self, msg: str)  -> None: self._append("errors", msg)
-    def append_log(self, msg: str)    -> None: self._append("log", msg)
 
     # --- Computed properties --------------------------------------------------
-
-    def finish(self) -> "ScanResult":
-        self.finished_at = time.time()
-        self.duration_s  = round(self.finished_at - self.started_at, 2)
-        return self
 
     @property
     def total_findings(self) -> int:
         return sum(len(getattr(self, attr)) for attr, _ in _FINDING_LISTS)
-
-    @property
-    def success(self) -> bool:
-        return not bool(self.errors) or self.total_findings > 0
 
     def to_dict(self) -> Dict[str, Any]:
         findings: List[Dict[str, Any]] = []
@@ -208,18 +173,8 @@ class ScanResult:
                 d["type"] = ftype.value
                 findings.append(d)
 
-        return {
-            "success":         self.success,
-            "target":          self.target,
-            "duration_s":      self.duration_s,
-            "waf_detected":    self.waf_detected,
-            "evasion_applied": self.evasion_applied,
-            "dbms_detected":   self.dbms_detected,
-            "crawled_urls":    self.crawled_urls,
-            "params_tested":   self.params_tested,
-            "requests_sent":   self.requests_sent,
-            "total_findings":  self.total_findings,
-            "findings":        findings,
-            "errors":          self.errors,
-            "log":             self.log,
-        }
+        result = self._base_dict()
+        result["dbms_detected"] = self.dbms_detected
+        result["total_findings"] = self.total_findings
+        result["findings"] = findings
+        return result

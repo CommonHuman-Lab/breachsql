@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "breachsql"
-version = "0.1.0"
+version = "0.1.1"
 description = "Context-aware SQL injection scanner with WAF detection and evasion"
 readme = "README.md"
 license = { text = "AGPL-3.0-or-later" }
@@ -29,6 +29,7 @@ classifiers = [
 dependencies = [
   "requests>=2.28.0",
   "urllib3>=1.26.0",
+  "commonhuman-cli>=0.1.0",
 ]
 
 [project.optional-dependencies]
