@@ -16,13 +16,16 @@ def _proof_url(url: str, param: str, payload: str, original: str = "1") -> str:
     triggered the finding.  The result is percent-encoded so it is safe
     to paste into a browser address bar or terminal.
     """
-    parsed   = _up.urlparse(url)
-    qs       = _up.parse_qs(parsed.query, keep_blank_values=True)
-    orig_val = qs.get(param, [original])[0]
-    injected = orig_val + payload
-    qs[param] = [injected]
-    new_query = _up.urlencode(qs, doseq=True)
-    return _up.urlunparse(parsed._replace(query=new_query))
+    try:
+        parsed   = _up.urlparse(url)
+        qs       = _up.parse_qs(parsed.query, keep_blank_values=True)
+        orig_val = qs.get(param, [original])[0]
+        injected = orig_val + payload
+        qs[param] = [injected]
+        new_query = _up.urlencode(qs, doseq=True)
+        return _up.urlunparse(parsed._replace(query=new_query))
+    except Exception:
+        return ""
 
 
 def print_summary(result) -> None:
