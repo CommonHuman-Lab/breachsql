@@ -10,11 +10,6 @@
 
 ```bash
 pip install breachsql
-
-# from source
-git clone https://github.com/CommonHuman-Lab/breachsql.git
-cd breachsql
-python -m breachsql
 ```
 
 > Point it at a target. Get findings. Drop it in a pipeline.
