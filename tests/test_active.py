@@ -17,6 +17,7 @@ from breachsql.engine._scanner.active import (
     _len_ratio,
     _fetch,
     _find_column_count,
+    strip_status_sentinel,
 )
 from breachsql.engine._scanner.options import ScanOptions
 from breachsql.engine.reporter import ScanResult
@@ -286,7 +287,7 @@ class TestFetch:
 
         injector.post.assert_called_once()
         injector.get.assert_called_once_with("https://x.com/result")
-        assert result == "<html>result from second url</html>"
+        assert strip_status_sentinel(result) == "<html>result from second url</html>"
 
 
 class TestFindColumnCount:
