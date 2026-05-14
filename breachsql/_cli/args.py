@@ -36,7 +36,13 @@ def interactive_prompts() -> argparse.Namespace:
             url = ""
 
     _section("Authentication  (optional)")
-    cookie = _prompt("  Cookies", hint="name=val; name2=val2")
+    login_url = _prompt("  Login URL", hint="https://target.com/login  (blank to skip)")
+    if login_url:
+        login_user = _prompt("  Username")
+        login_pass = _prompt("  Password")
+    else:
+        login_user = login_pass = ""
+    cookie = _prompt("  Cookies", hint="name=val; name2=val2  (or leave blank if using --login-url)")
     headers_raw: list[str] = []
     while True:
         h = _prompt("  Header", hint="KEY:VALUE  (blank to finish)")
@@ -103,6 +109,14 @@ def interactive_prompts() -> argparse.Namespace:
         path_params=[p.strip() for p in path_params.split(",") if p.strip()],
         cookie_params=[p.strip() for p in cookie_params.split(",") if p.strip()],
         header_params=[p.strip() for p in header_params.split(",") if p.strip()],
+        login_url=login_url,
+        login_user=login_user,
+        login_pass=login_pass,
+        login_user_field="username",
+        login_pass_field="password",
+        openapi="",
+        base_url="",
+        browser_crawl=False,
     )
 
 
@@ -175,5 +189,21 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Suppress live log output")
     p.add_argument("-v", "--verbose", action="store_true",
                    help="Show all checks including clean ones")
+    p.add_argument("--login-url", default="", dest="login_url",
+                   help="Login form URL — authenticates before scanning")
+    p.add_argument("--login-user", default="", dest="login_user",
+                   help="Username for form login")
+    p.add_argument("--login-pass", default="", dest="login_pass",
+                   help="Password for form login")
+    p.add_argument("--login-user-field", default="username", dest="login_user_field",
+                   help="Username field name (default: username)")
+    p.add_argument("--login-pass-field", default="password", dest="login_pass_field",
+                   help="Password field name (default: password)")
+    p.add_argument("--openapi", default="", dest="openapi",
+                   help="OpenAPI/Swagger spec file path or URL — imports endpoints to scan")
+    p.add_argument("--base-url", default="", dest="base_url",
+                   help="Base URL override for OpenAPI spec")
+    p.add_argument("--browser-crawl", action="store_true", dest="browser_crawl",
+                   help="Use headless Chromium for endpoint discovery (requires selenium)")
 
     return p

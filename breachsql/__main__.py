@@ -67,6 +67,54 @@ def main() -> None:
     exclude_patterns = compile_exclude_patterns(args.exclude)
     headers          = parse_headers(args.header)
 
+    # Form login
+    if getattr(args, "login_url", "") and getattr(args, "login_user", ""):
+        from commonhuman_core.auth import form_login as _form_login
+        if not args.quiet and not args.json_output:
+            print(f"[*] Authenticating via {args.login_url} ...")
+        auth = _form_login(
+            login_url=args.login_url,
+            username=args.login_user,
+            password=getattr(args, "login_pass", ""),
+            username_field=getattr(args, "login_user_field", "username"),
+            password_field=getattr(args, "login_pass_field", "password"),
+        )
+        if auth.cookies and not args.cookie:
+            args.cookie = auth.cookies
+        headers.update(auth.headers)
+
+    # OpenAPI spec import
+    if getattr(args, "openapi", ""):
+        from commonhuman_core.openapi import load_openapi as _load_openapi
+        if not args.quiet and not args.json_output:
+            print(f"[*] Loading OpenAPI spec from {args.openapi} ...")
+        api_eps = _load_openapi(args.openapi, base_url=getattr(args, "base_url", ""))
+        seen_oa = set(urls)
+        for ep in api_eps:
+            if ep.url not in seen_oa:
+                urls.append(ep.url)
+                seen_oa.add(ep.url)
+        if not args.quiet and not args.json_output:
+            print(f"[*] OpenAPI: {len(api_eps)} endpoint(s) added")
+
+    # Browser crawl — headless JS endpoint discovery
+    if getattr(args, "browser_crawl", False) and urls:
+        from commonhuman_core.browser_crawler import browser_crawl as _browser_crawl
+        seed = urls[0]
+        if not args.quiet and not args.json_output:
+            print(f"[*] Browser-crawling {seed} ...")
+        bc_found = _browser_crawl(
+            start_url=seed,
+            max_pages=args.max_pages,
+            max_depth=args.max_depth,
+            cookies=args.cookie or "",
+        )
+        seen_bc = set(urls)
+        new_bc  = [u for u in bc_found if u not in seen_bc]
+        urls.extend(new_bc)
+        if not args.quiet and not args.json_output:
+            print(f"[*] Browser crawl: {len(new_bc)} additional endpoint(s) queued")
+
     opts = ScanOptions(
         crawl=args.crawl,
         data=args.data,

@@ -46,19 +46,30 @@ breachsql -u "https://target.com/login" -d "username=admin&password=x"
 breachsql -u "https://target.com/api/user" -d '{"user_id": 1}'
 
 # Cookie injection
-breachsql -u "https://target.com/profile" --cookies "session_id=abc" --cookie-params session_id
+breachsql -u "https://target.com/profile" --cookie "session_id=abc" --cookie-params session_id
 
 # Path parameter
 breachsql -u "https://target.com/item/1" --path-params id
 
 # Time-blind with custom threshold
-breachsql -u "https://target.com/search?name=x" -t T --time-threshold 3
+breachsql -u "https://target.com/search?name=x" --technique T --time-threshold 3
 
 # Specific backend and technique
-breachsql -u "https://target.com/users?id=1" --dbms mysql -t E
+breachsql -u "https://target.com/users?id=1" --dbms mysql --technique E
 
 # Full multi-technique scan
-breachsql -u "https://target.com/report?id=1" --dbms mysql -t EBTUS --level 2 --risk 2
+breachsql -u "https://target.com/report?id=1" --dbms mysql --technique EBTUS --level 2 --risk 2
+
+# Authenticate before scanning
+breachsql -u "https://target.com/app/search?q=test" \
+  --login-url "https://target.com/login" \
+  --login-user admin --login-pass secret
+
+# Import all endpoints from an OpenAPI / Swagger spec
+breachsql -u "https://target.com/" --openapi https://target.com/openapi.json
+
+# Discover JS-rendered endpoints first, then scan everything
+breachsql -u "https://target.com/" --browser-crawl --level 2
 ```
 
 ---
@@ -106,14 +117,18 @@ for f in result.error_based:
 | `--risk` | `1` | Payload aggression: 1 = low, 2 = medium, 3 = high |
 | `--time-threshold` | `5` | Seconds to consider a time-blind hit (T technique) |
 | `-d` / `--data` | — | POST body — form-encoded or JSON |
-| `--cookies` | — | Cookie string: `name=val; name2=val2` |
+| `--cookie` | — | Cookie string: `name=val; name2=val2` |
 | `--cookie-params` | — | Which cookie names to inject |
 | `--header-params` | — | HTTP header names to inject (e.g. `X-Forwarded-For`) |
 | `--path-params` | — | Path segment names to treat as injection points |
 | `--second-url` | — | Read URL for two-step injection |
 | `--timeout` | `10` | Per-request timeout in seconds |
+| `--login-url` | — | Login form URL — authenticates before scanning |
+| `--login-user` | — | Username for form login |
+| `--login-pass` | — | Password for form login |
+| `--openapi` | — | OpenAPI/Swagger spec file or URL — imports endpoints to scan |
+| `--browser-crawl` | — | Headless Chromium endpoint discovery (requires selenium) |
 | `-o` | — | Write findings to JSON file |
-
 
 ---
 
