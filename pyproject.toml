@@ -31,6 +31,7 @@ dependencies = [
   "urllib3>=1.26.0",
   "commonhuman-cli>=0.1.0",
   "commonhuman-payloads>=0.1.0",
+  "commonhuman-core>=0.1.0",
 ]
 
 [project.optional-dependencies]
