@@ -42,7 +42,7 @@ def interactive_prompts() -> argparse.Namespace:
         login_pass = _prompt("  Password")
     else:
         login_user = login_pass = ""
-    cookie = _prompt("  Cookies", hint="name=val; name2=val2  (or leave blank if using --login-url)")
+    cookie = _prompt("  Cookies", hint="name=val; name2=val2  (blank if using --login-url)")
     headers_raw: list[str] = []
     while True:
         h = _prompt("  Header", hint="KEY:VALUE  (blank to finish)")
@@ -63,9 +63,9 @@ def interactive_prompts() -> argparse.Namespace:
     time_thr   = _prompt("  Time threshold", default="4", hint="seconds to flag time-based hit")
     risk_str   = _prompt("  Risk level", default="1", hint="1=safe 2=moderate 3=aggressive")
     second_url = _prompt("  Second URL", hint="read SQLi response from this URL (blank to skip)")
-    path_params   = _prompt("  Path params",   hint="comma-separated names e.g. id,slug (blank to auto-detect)")
-    cookie_params = _prompt("  Cookie params", hint="comma-separated cookie names to inject (blank to skip)")
-    header_params = _prompt("  Header params", hint="comma-separated header names to inject (blank to skip)")
+    path_params   = _prompt("  Path params",   hint="comma-separated names e.g. id,slug (blank=auto)")
+    cookie_params = _prompt("  Cookie params", hint="comma-separated cookie names to inject (blank=skip)")
+    header_params = _prompt("  Header params", hint="comma-separated header names to inject (blank=skip)")
 
     _section("Scan options")
     level_str   = _prompt("  Scan level",  default="1", hint="1=fast  2=thorough  3=deep")
@@ -79,6 +79,10 @@ def interactive_prompts() -> argparse.Namespace:
     else:
         max_pages_str = "100"
         max_depth_str = "3"
+
+    _section("Exploitation  (optional)")
+    exploit = _prompt_bool("  Extract data after finding SQLi", default=False)
+    dump    = _prompt("  Dump table", hint="table name to dump rows from (blank to skip)") if exploit else ""
     print()
 
     return argparse.Namespace(
@@ -117,6 +121,8 @@ def interactive_prompts() -> argparse.Namespace:
         openapi="",
         base_url="",
         browser_crawl=False,
+        exploit=exploit,
+        dump=dump,
     )
 
 
@@ -205,5 +211,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Base URL override for OpenAPI spec")
     p.add_argument("--browser-crawl", action="store_true", dest="browser_crawl",
                    help="Use headless Chromium for endpoint discovery (requires selenium)")
+
+    # --- Exploitation ---
+    p.add_argument("--exploit", action="store_true", default=False,
+                   help="After finding SQLi, extract version / current user / database / tables")
+    p.add_argument("--dump", default="", metavar="TABLE",
+                   help="Dump all rows from TABLE using a confirmed injection point (implies --exploit)")
 
     return p

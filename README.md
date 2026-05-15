@@ -61,6 +61,12 @@ breachsql -u "https://target.com/search?name=x" --technique T --time-threshold 3
 # Specific backend and technique
 breachsql -u "https://target.com/users?id=1" --dbms mysql --technique E
 
+# Extract version, current user, database name, and table list after detection
+breachsql -u "https://target.com/users?id=1" --exploit
+
+# Dump all rows from a specific table
+breachsql -u "https://target.com/users?id=1" --dump users
+
 # Full multi-technique scan
 breachsql -u "https://target.com/report?id=1" --dbms mysql --technique EBTUS --level 2 --risk 2
 
@@ -132,6 +138,8 @@ for f in result.error_based:
 | `--login-pass` | — | Password for form login |
 | `--openapi` | — | OpenAPI/Swagger spec file or URL — imports endpoints to scan |
 | `--browser-crawl` | — | Headless Chromium endpoint discovery (requires selenium) |
+| `--exploit` | — | After detection, extract version / current user / database name / table list |
+| `--dump TABLE` | — | Dump all rows from TABLE using a confirmed injection point (implies `--exploit`) |
 | `-o` | — | Write findings to JSON file |
 
 ---

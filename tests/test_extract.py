@@ -19,22 +19,21 @@ def _surface(url="https://x.com/?id=1", method="GET", param="id"):
 
 class TestExtractValue:
     def test_extracts_known_string_boolean(self):
-        """Binary-search extraction must recover a known string character by character."""
+        """Boolean extraction must recover a known string via OR-based single probe."""
         target = "abc"
+        _baseline = "<html>not-found</html>"
+        _found    = "<html>found</html>"
 
         def _fetch_side(injector, url, method, params, param, value,
                         second_url="", json_body=False, path_index=0):
-            if value is None:
-                return "<html>User exists</html>"
-            m = re.search(r"ASCII\(SUBSTRING\(\((.+?)\),(\d+),1\)\)>(\d+)", value)
+            m = re.search(r"ASCII\(SUBSTRING\(\((.+?)\),(\d+),1\)\)>(\d+)", value or "")
             if not m:
-                return "<html>User does not exist</html>"
-            pos = int(m.group(2))
+                return _baseline
+            pos       = int(m.group(2))
             threshold = int(m.group(3))
             actual_ord = ord(target[pos - 1]) if pos <= len(target) else 0
-            if actual_ord > threshold:
-                return "<html>User exists</html>"
-            return "<html>User does not exist</html>"
+            # OR fires → all rows returned (differs from baseline) when condition true
+            return _found if actual_ord > threshold else _baseline
 
         with patch("breachsql.engine._scanner.extract._fetch", side_effect=_fetch_side):
             opts = ScanOptions(dbms="mysql")
@@ -44,10 +43,66 @@ class TestExtractValue:
                 evasions=["none"],
                 opts=opts,
                 injector=MagicMock(),
-                baseline="<html>User exists</html>",
+                baseline=_baseline,
                 mode="boolean",
             )
-        assert extracted.rstrip() == "abc"
+        assert extracted == "abc"
+
+    def test_boolean_payloads_use_or_prefix(self):
+        """All boolean extraction probes must use OR injection, not AND."""
+        seen = []
+
+        def _capture(injector, url, method, params, param, value,
+                     second_url="", json_body=False, path_index=0):
+            if value:
+                seen.append(value)
+            return "<html>not-found</html>"
+
+        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_capture):
+            opts = ScanOptions(dbms="mysql")
+            extract_value(
+                expr="VERSION()",
+                surface=_surface(),
+                evasions=["none"],
+                opts=opts,
+                injector=MagicMock(),
+                baseline="<html>not-found</html>",
+                mode="boolean",
+            )
+
+        assert len(seen) > 0
+        for payload in seen:
+            assert "' OR " in payload, f"Expected OR injection, got: {payload!r}"
+            assert "' AND " not in payload, f"Unexpected AND injection: {payload!r}"
+
+    def test_end_of_string_stops_extraction(self):
+        """Extraction must stop at end-of-string (ASCII 0) without appending junk."""
+        target = "hi"
+        _baseline = "empty"
+        _found    = "found"
+
+        def _fetch_side(injector, url, method, params, param, value,
+                        second_url="", json_body=False, path_index=0):
+            m = re.search(r"ASCII\(SUBSTRING\(\((.+?)\),(\d+),1\)\)>(\d+)", value or "")
+            if not m:
+                return _baseline
+            pos       = int(m.group(2))
+            threshold = int(m.group(3))
+            actual_ord = ord(target[pos - 1]) if pos <= len(target) else 0
+            return _found if actual_ord > threshold else _baseline
+
+        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_fetch_side):
+            result = extract_value(
+                expr="SELECT 'hi'",
+                surface=_surface(),
+                evasions=["none"],
+                opts=ScanOptions(dbms="mysql"),
+                injector=MagicMock(),
+                baseline=_baseline,
+                mode="boolean",
+            )
+
+        assert result == "hi", f"Expected 'hi', got {result!r}"
 
     def test_returns_empty_when_no_signal(self):
         """When both responses are identical (no boolean channel), return empty string."""

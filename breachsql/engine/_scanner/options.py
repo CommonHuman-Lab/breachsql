@@ -38,6 +38,8 @@ class ScanOptions:
         path_params:      list[str] | None  = None,     # path segment names to inject
         cookie_params:    list[str] | None  = None,     # cookie names to inject into
         header_params:    list[str] | None  = None,     # HTTP header names to inject into
+        exploit:          bool              = False,     # extract version/user/db/tables after scan
+        dump:             str               = "",        # table name to dump rows from
     ) -> None:
         # Shared
         self.crawl            = crawl
@@ -74,6 +76,8 @@ class ScanOptions:
         self.path_params      = path_params or []
         self.cookie_params    = cookie_params or []
         self.header_params    = header_params or []
+        self.exploit          = exploit
+        self.dump             = dump.strip()
 
     # Convenience: check which techniques are enabled
     @property

@@ -138,6 +138,8 @@ def main() -> None:
         path_params=_split_param_list(getattr(args, "path_params", "")),
         cookie_params=_split_param_list(getattr(args, "cookie_params", "")),
         header_params=_split_param_list(getattr(args, "header_params", "")),
+        exploit=getattr(args, "exploit", False) or bool(getattr(args, "dump", "")),
+        dump=getattr(args, "dump", ""),
     )
 
     all_results = []
