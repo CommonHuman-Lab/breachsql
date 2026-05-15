@@ -15,6 +15,10 @@ pip install breachsql
 python3 -m venv .venv
 source .venv/bin/activate
 pip install breachsql
+
+
+#Use against target/firerange
+breachsql -u "http://127.0.0.1:17476" --browser --crawl --level 2
 ```
 
 > Point it at a target. Get findings. Drop it in a pipeline.
