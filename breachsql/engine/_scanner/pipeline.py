@@ -176,8 +176,17 @@ def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> 
 
     # 5. Time-based blind (sequential — timing sensitive, threading skews results)
     if opts.use_time:
-        logger.info("Running time-based blind detection (%d surfaces)", len(surfaces))
-        for surface in surfaces:
+        confirmed = {
+            (f.url, f.parameter, f.method)
+            for lst in (result.error_based, result.boolean_based, result.union_based)
+            for f in lst
+        }
+        time_surfaces = [
+            s for s in surfaces
+            if (s["url"], s["single_param"], s["method"]) not in confirmed
+        ]
+        logger.info("Running time-based blind detection (%d surfaces)", len(time_surfaces))
+        for surface in time_surfaces:
             try:
                 run_time_based(surface, evasions, opts, injector, result)
             except Exception as exc:
