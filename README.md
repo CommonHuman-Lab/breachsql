@@ -6,19 +6,18 @@
 [![Security](https://img.shields.io/badge/Security-SQL%20Injection%20Scanner-red.svg)](https://github.com/CommonHuman-Lab/breachsql)
 [![WAF Evasion](https://img.shields.io/badge/WAF%20Evasion-built--in-orange.svg)](https://github.com/CommonHuman-Lab/breachsql)
 
-**Context-aware SQL injection scanner** — error-based, boolean-blind, time-blind, UNION, and stacked injection detection across MySQL, MariaDB, PostgreSQL, SQLite, MSSQL, and Oracle. WAF detection and evasion built in. No Burp license. Just findings.
+**Fast SQL injection scanner with built-in exploitation** — detect and extract in one command, across all major backends, with WAF evasion baked in. No Java. No license. Drops into a Python pipeline.
 
 ```bash
+# Kali / Debian / Ubuntu — use a virtual env (required on externally-managed Python)
+python3 -m venv .venv && source .venv/bin/activate
 pip install breachsql
 
-# Install in virtual env
-python3 -m venv .venv
-source .venv/bin/activate
-pip install breachsql
+# Scan and exploit in one pass
+breachsql -u "https://target.com/item?id=1" --exploit
 
-
-#Use against target/firerange
-breachsql -u "http://127.0.0.1:17476" --browser --crawl --level 2
+# Dump a table straight from the finding
+breachsql -u "https://target.com/item?id=1" --dump users
 ```
 
 > Point it at a target. Get findings. Drop it in a pipeline.
@@ -27,13 +26,13 @@ breachsql -u "http://127.0.0.1:17476" --browser --crawl --level 2
 
 ## Why BreachSQL?
 
-- **Multi-technique** — error-based, boolean-blind, time-blind, UNION extraction, stacked queries, all in one pass
-- **Multi-backend** — MySQL, MariaDB, PostgreSQL, SQLite, MSSQL, and Oracle detection and technique selection
-- **Context-aware** — numeric, string, quoted, parenthesised, and header/cookie injection contexts
-- **WAF-aware** — detects common WAFs and applies evasion transforms automatically
-- **Every injection surface** — query params, POST form, JSON body, path parameters, cookies, headers
-- **Two-step injection** — inject at one URL, observe the result at another
-- **Pipeline-native** — JSON output, clean exit codes, Python API
+- **Faster** — binary-search boolean extraction, parallel surface probing, no per-request sleep loops
+- **Detect → exploit in one pass** — `--exploit` extracts version, user, database, and tables immediately after a confirmed hit; `--dump TABLE` pulls rows without a second invocation
+- **Python API** — `from breachsql.engine import scan, ScanOptions` — embed it directly in your own tooling or scripts
+- **Scan from spec** — `--openapi` imports every endpoint from a Swagger/OpenAPI file and scans them all
+- **Curated payloads** — backed by [commonhuman-payloads](https://github.com/CommonHuman-Lab/commonhuman-payloads), an auditable, versioned payload library shared across the toolchain
+- **Pipeline-native** — structured JSON output, clean exit codes, no interactive prompts by default
+- **Lightweight** — pure Python 3.10+, no C extensions, no Java, installs in a venv in seconds
 
 ---
 
@@ -87,7 +86,7 @@ breachsql -u "https://target.com/" --browser-crawl --level 2
 ## Techniques
 
 | Flag | Technique | Description |
-|------|-----------|-------------|
+| ---- | --------- | ----------- |
 | `E` | Error-based | Database errors leak schema/data via malformed syntax |
 | `B` | Boolean-blind | True/false response differences reveal data bit by bit |
 | `T` | Time-blind | `SLEEP()` / `pg_sleep()` / `randomblob()` timing confirms injection |
@@ -118,7 +117,7 @@ for f in result.error_based:
 ## Options
 
 | Option | Default | Description |
-|--------|---------|-------------|
+| ------ | ------- | ----------- |
 | `-u` | — | Target to use |
 | `--crawl` | — | Crawl target |
 | `--dbms` | auto | Target backend: `mysql`, `mariadb`, `postgres`, `sqlite`, `mssql`, `oracle` |
@@ -165,11 +164,12 @@ pytest tests/test_firerange.py -v
 ```bash
 git clone https://github.com/CommonHuman-Lab/breachsql.git
 cd breachsql
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 pip install -e ".[dev]"   # + pytest, mypy, ruff
 ```
 
-Requires Python 3.10+. No C extensions.
+Requires Python 3.10+. No C extensions. On Kali and other Debian-based systems, the virtual env is required — system Python is externally managed.
 
 ---
 
