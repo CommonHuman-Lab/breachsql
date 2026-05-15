@@ -28,7 +28,7 @@ breachsql -u "http://127.0.0.1:17476" --browser --crawl --level 2
 ## Why BreachSQL?
 
 - **Multi-technique** — error-based, boolean-blind, time-blind, UNION extraction, stacked queries, all in one pass
-  - **Multi-backend** — MySQL, MariaDB, PostgreSQL, SQLite, MSSQL, and Oracle detection and technique selection
+- **Multi-backend** — MySQL, MariaDB, PostgreSQL, SQLite, MSSQL, and Oracle detection and technique selection
 - **Context-aware** — numeric, string, quoted, parenthesised, and header/cookie injection contexts
 - **WAF-aware** — detects common WAFs and applies evasion transforms automatically
 - **Every injection surface** — query params, POST form, JSON body, path parameters, cookies, headers
