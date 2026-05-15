@@ -9,8 +9,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from breachsql.engine._scanner.extract import extract_value
+from breachsql.engine._scanner.extract import extract_value, extract_via_union
 from breachsql.engine._scanner.options import ScanOptions
+from breachsql.engine.reporter import UnionFinding
 
 
 def _surface(url="https://x.com/?id=1", method="GET", param="id"):
@@ -219,3 +220,167 @@ class TestTimeBlindPayloads:
             )
         assert any("WAITFOR DELAY" in p and p.startswith("'") and "IF " in p
                    for p in payloads)
+
+
+# ---------------------------------------------------------------------------
+# extract_via_union
+# ---------------------------------------------------------------------------
+
+def _union_finding(payload="')) UNION SELECT 'BreachSQL_marker',2-- -"):
+    return UnionFinding(
+        url="https://x.com/search",
+        parameter="q",
+        method="GET",
+        payload=payload,
+        column_count=2,
+    )
+
+
+def _surface(url="https://x.com/search", param="q"):
+    return {"url": url, "method": "GET", "params": {param: ""}, "single_param": param}
+
+
+class TestExtractViaUnion:
+    def _run(self, dbms, resp_text, payload=None):
+        finding = _union_finding(payload or "')) UNION SELECT 'BreachSQL_marker',2-- -")
+        with patch("breachsql.engine._scanner.extract._fetch", return_value=resp_text):
+            return extract_via_union(
+                expr="VERSION()",
+                union_finding=finding,
+                surface=_surface(),
+                evasions=["none"],
+                opts=ScanOptions(dbms=dbms),
+                injector=MagicMock(),
+            )
+
+    def test_mysql_uses_concat_function(self):
+        seen = []
+        finding = _union_finding()
+        def _capture(injector, url, method, params, param, value, **kw):
+            seen.append(value)
+            return ""
+        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_capture):
+            extract_via_union(
+                expr="VERSION()",
+                union_finding=finding,
+                surface=_surface(),
+                evasions=["none"],
+                opts=ScanOptions(dbms="mysql"),
+                injector=MagicMock(),
+            )
+        assert any("CONCAT(" in p for p in seen)
+
+    def test_sqlite_uses_pipe_concat(self):
+        seen = []
+        finding = _union_finding()
+        def _capture(injector, url, method, params, param, value, **kw):
+            seen.append(value)
+            return ""
+        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_capture):
+            extract_via_union(
+                expr="sqlite_version()",
+                union_finding=finding,
+                surface=_surface(),
+                evasions=["none"],
+                opts=ScanOptions(dbms="sqlite"),
+                injector=MagicMock(),
+            )
+        assert any("||" in p for p in seen)
+
+    def test_postgres_uses_pipe_concat(self):
+        seen = []
+        finding = _union_finding()
+        def _capture(injector, url, method, params, param, value, **kw):
+            seen.append(value)
+            return ""
+        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_capture):
+            extract_via_union(
+                expr="version()",
+                union_finding=finding,
+                surface=_surface(),
+                evasions=["none"],
+                opts=ScanOptions(dbms="postgres"),
+                injector=MagicMock(),
+            )
+        assert any("||" in p for p in seen)
+
+    def test_mssql_uses_plus_concat(self):
+        seen = []
+        finding = _union_finding()
+        def _capture(injector, url, method, params, param, value, **kw):
+            seen.append(value)
+            return ""
+        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_capture):
+            extract_via_union(
+                expr="@@version",
+                union_finding=finding,
+                surface=_surface(),
+                evasions=["none"],
+                opts=ScanOptions(dbms="mssql"),
+                injector=MagicMock(),
+            )
+        assert any("'BSQL_OUT_'+" in p for p in seen)
+
+    def test_extracts_value_between_markers(self):
+        marker_resp = "...BSQL_OUT_5.7.42_BSQL_END..."
+        result = self._run("mysql", marker_resp)
+        assert result == "5.7.42"
+
+    def test_returns_empty_when_no_marker_in_response(self):
+        result = self._run("mysql", "<html>no markers here</html>")
+        assert result == ""
+
+    def test_returns_empty_when_fetch_returns_none(self):
+        result = self._run("mysql", None)
+        assert result == ""
+
+    def test_returns_empty_when_fetch_returns_empty_string(self):
+        result = self._run("mysql", "")
+        assert result == ""
+
+    def test_returns_empty_when_payload_has_no_marker(self):
+        finding = _union_finding(payload="')) UNION SELECT 1,2-- -")
+        with patch("breachsql.engine._scanner.extract._fetch", return_value="anything"):
+            result = extract_via_union(
+                expr="VERSION()",
+                union_finding=finding,
+                surface=_surface(),
+                evasions=["none"],
+                opts=ScanOptions(dbms="mysql"),
+                injector=MagicMock(),
+            )
+        assert result == ""
+
+    def test_oracle_uses_pipe_concat(self):
+        seen = []
+        finding = _union_finding()
+        def _capture(injector, url, method, params, param, value, **kw):
+            seen.append(value)
+            return ""
+        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_capture):
+            extract_via_union(
+                expr="banner FROM v$version",
+                union_finding=finding,
+                surface=_surface(),
+                evasions=["none"],
+                opts=ScanOptions(dbms="oracle"),
+                injector=MagicMock(),
+            )
+        assert any("||" in p for p in seen)
+
+    def test_auto_dbms_falls_back_to_mysql_concat(self):
+        seen = []
+        finding = _union_finding()
+        def _capture(injector, url, method, params, param, value, **kw):
+            seen.append(value)
+            return ""
+        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_capture):
+            extract_via_union(
+                expr="VERSION()",
+                union_finding=finding,
+                surface=_surface(),
+                evasions=["none"],
+                opts=ScanOptions(dbms="auto"),
+                injector=MagicMock(),
+            )
+        assert any("CONCAT(" in p for p in seen)

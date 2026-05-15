@@ -11,9 +11,12 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import json
 import os
+import re
 import sys
+import urllib.parse as _up
 
 _HERE   = os.path.dirname(os.path.abspath(__file__))
 _PARENT = os.path.dirname(_HERE)
@@ -33,6 +36,9 @@ from commonhuman_cli.entrypoint import (
 )
 
 _cli_logger = get_logger("breachsql")
+
+_AUTH_PATH_RE       = re.compile(r'/(login|signin|authenticate|session|token)\b', re.IGNORECASE)
+_AUTH_SYNTH_BODY    = '{"email":"test@test.com","password":"test","username":"test"}'
 
 
 def _split_param_list(val) -> list[str]:
@@ -97,6 +103,30 @@ def main() -> None:
         if not args.quiet and not args.json_output:
             print(f"[*] OpenAPI: {len(api_eps)} endpoint(s) added")
 
+    # Per-URL POST body overrides: populated by JS discovery for auth endpoints.
+    url_data_overrides: dict[str, str] = {}
+
+    # JS API discovery — parse SPA bundles for REST/API endpoints
+    if (args.crawl or getattr(args, "browser_crawl", False)) and urls:
+        from commonhuman_core.js_api_discover import js_api_discover as _js_discover
+        seed = urls[0]
+        if not args.quiet and not args.json_output:
+            print(f"[*] JS API discovery on {seed} ...")
+        seen_js = set(urls)
+        js_found = _js_discover(seed)
+        new_js: list[str] = []
+        for _method, js_url, _tmpl in js_found:
+            if js_url not in seen_js:
+                seen_js.add(js_url)
+                new_js.append(js_url)
+                urls.append(js_url)
+                # Synthesise a JSON body for discovered POST auth endpoints so
+                # the scanner can build injectable surfaces (email/password fields).
+                if _method == "POST" and _AUTH_PATH_RE.search(_up.urlparse(js_url).path):
+                    url_data_overrides[js_url] = _AUTH_SYNTH_BODY
+        if not args.quiet and not args.json_output:
+            print(f"[*] JS discovery: {len(new_js)} endpoint(s) found")
+
     # Browser crawl — headless JS endpoint discovery
     if getattr(args, "browser_crawl", False) and urls:
         from commonhuman_core.browser_crawler import browser_crawl as _browser_crawl
@@ -144,6 +174,7 @@ def main() -> None:
 
     all_results = []
     any_findings = False
+    multi = len(urls) > 1
 
     for target_url in urls:
         if any(p.search(target_url) for p in exclude_patterns):
@@ -151,12 +182,18 @@ def main() -> None:
             continue
 
         if not args.json_output and not args.quiet:
-            print(BOLD(f"[*] Target    : {target_url}"))
-            print(BOLD(f"[*] Level     : {args.level}  Threads: {args.threads}  Crawl: {args.crawl}"))
-            print(BOLD(f"[*] DBMS hint : {args.dbms}  Techniques: {args.technique}  Risk: {args.risk}"))
-            print()
+            if not multi:
+                print(BOLD(f"[*] Target    : {target_url}"))
+                print(BOLD(f"[*] Level     : {args.level}  Threads: {args.threads}  Crawl: {args.crawl}"))
+                print(BOLD(f"[*] DBMS hint : {args.dbms}  Techniques: {args.technique}  Risk: {args.risk}"))
+                print()
 
-        result = scan(target_url, opts)
+        _scan_opts = opts
+        if target_url in url_data_overrides and not opts.data:
+            _scan_opts = copy.copy(opts)
+            _scan_opts.data = url_data_overrides[target_url]
+
+        result = scan(target_url, _scan_opts)
         all_results.append(result)
         if result.total_findings > 0:
             any_findings = True
@@ -165,7 +202,36 @@ def main() -> None:
             print(json.dumps(result.to_dict(), indent=2))
             continue
 
-        print_summary(result)
+        if multi:
+            # In multi-URL mode: only show a line when findings exist
+            if result.total_findings > 0:
+                print(f"  [+] {result.total_findings} finding(s) — {target_url}")
+        else:
+            print_summary(result)
+
+    if not args.json_output and multi:
+        # Merge all results into one combined summary
+        from .engine.reporter import ScanResult
+        combined = ScanResult(target=urls[0])
+        combined.duration_s      = sum(r.duration_s for r in all_results)
+        combined.requests_sent   = sum(r.requests_sent for r in all_results)
+        combined.crawled_urls    = sum(r.crawled_urls for r in all_results)
+        combined.params_tested   = sum(r.params_tested for r in all_results)
+        combined.waf_detected    = next((r.waf_detected for r in all_results if r.waf_detected), None)
+        combined.evasion_applied = next((r.evasion_applied for r in all_results if r.evasion_applied), None)
+        combined.dbms_detected   = next((r.dbms_detected for r in all_results if r.dbms_detected), None)
+        for r in all_results:
+            combined.error_based.extend(r.error_based)
+            combined.boolean_based.extend(r.boolean_based)
+            combined.time_based.extend(r.time_based)
+            combined.union_based.extend(r.union_based)
+            combined.oob.extend(r.oob)
+            combined.stacked.extend(r.stacked)
+            combined.extracted.extend(r.extracted)
+            combined.errors.extend(r.errors)
+        combined.target = f"{urls[0]} (+{len(urls)-1} more)" if len(urls) > 1 else urls[0]
+        print()
+        print_summary(combined)
 
     if args.json_output:
         sys.exit(0 if not any_findings else 1)

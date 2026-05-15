@@ -136,7 +136,8 @@ def print_summary(result) -> None:
             print(f"  {GREEN(BOLD('  Extracted Data'))}")
             print(f"  {GREEN('─' * 56)}")
             for f in result.extracted:
-                print(f"  {i}. {GREEN('[EXTRACTED]')} via {f.mode}-blind")
+                mode_label = f.mode if f.mode == "union" else f"{f.mode}-blind"
+                print(f"  {i}. {GREEN('[EXTRACTED]')} via {mode_label}")
                 print(f"     Param : {f.parameter}")
                 print(f"     URL   : {f.url}")
                 print(f"     Expr  : {DIM(f.expr)}")
