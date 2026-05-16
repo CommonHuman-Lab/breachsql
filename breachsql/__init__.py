@@ -25,7 +25,7 @@ from breachsql.engine.reporter import (
     FindingType,
 )
 
-__version__ = "0.1.1"
+__version__ = "0.1.3"
 
 BANNER = r"""
   ____                      _      ____   ___  _
