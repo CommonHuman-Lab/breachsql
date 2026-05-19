@@ -8,11 +8,6 @@
   <a href="https://www.python.org/">
     <img src="https://img.shields.io/badge/Python-3.10+-black?style=for-the-badge&logo=python&logoColor=white" alt="Python">
   </a>
-  <img src="https://img.shields.io/badge/Platform-Linux-white?style=for-the-badge&logo=linux&logoColor=black" alt="Platform">
-  <a href="https://github.com/CommonHuman-Lab/breachsql/releases">
-    <img src="https://img.shields.io/badge/Version-0.1.4-black?style=for-the-badge&logo=semver&logoColor=white" alt="Version">
-  </a>
-  <img src="https://img.shields.io/badge/SQL%20Injection-5%20Techniques-white?style=for-the-badge&logo=postgresql&logoColor=black" alt="SQL Injection">
 </p>
 <!-- markdownlint-enable MD033 -->
 
