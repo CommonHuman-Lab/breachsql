@@ -87,7 +87,13 @@ def scan_param(
             _test_error_based(url, method, params, param, evasion, opts, injector, result,
                               second_url, json_body, path_index)
 
-        if opts.use_boolean and len(result.boolean_based) == _prev_boolean_count:
+        # Skip boolean if error or union already gave a definitive confirmation —
+        # both are cheaper to detect and leave no ambiguity about injectability.
+        _definitive_hit = (
+            len(result.error_based) > _prev_error_count
+            or len(result.union_based) > _prev_union_count
+        )
+        if opts.use_boolean and not _definitive_hit and len(result.boolean_based) == _prev_boolean_count:
             _test_boolean(url, method, params, param, baseline, evasion, opts, injector, result,
                           second_url, json_body, path_index)
 
@@ -95,11 +101,12 @@ def scan_param(
             _test_union(url, method, params, param, evasion, opts, injector, result,
                         second_url, json_body, path_index)
 
-        # Stop escalating if all enabled techniques found something
+        # Stop escalating evasions as soon as any technique confirms injection.
+        # Once injectable under one evasion, further WAF-bypass attempts are wasted.
         _error_done   = (not opts.use_error)  or len(result.error_based)   > _prev_error_count
         _boolean_done = (not opts.use_boolean) or len(result.boolean_based) > _prev_boolean_count
         _union_done   = (not opts.use_union)   or len(result.union_based)   > _prev_union_count
-        if _error_done and _boolean_done and _union_done:
+        if _error_done or _boolean_done or _union_done:
             break
 
     # Level 3: run extended payload sets (db_contents + enum) via error channel
@@ -154,7 +161,7 @@ def _test_error_based(
     evasion: str, opts: ScanOptions, injector: Injector, result: ScanResult,
     second_url: str = "", json_body: bool = False, path_index: int = 0,
 ) -> None:
-    payloads = get_error_payloads(opts.dbms, opts.risk)
+    payloads = get_error_payloads(opts.dbms, opts.risk, opts.level)
 
     for raw_payload in payloads:
         payload = apply_evasion(raw_payload, evasion)
@@ -193,7 +200,7 @@ def _test_boolean(
     baseline: str, evasion: str, opts: ScanOptions, injector: Injector, result: ScanResult,
     second_url: str = "", json_body: bool = False, path_index: int = 0,
 ) -> None:
-    pairs = get_boolean_pairs(opts.risk)
+    pairs = get_boolean_pairs(opts.risk, opts.level)
 
     for raw_true, raw_false in pairs:
         pt = apply_evasion(raw_true,  evasion)
