@@ -123,7 +123,7 @@ class TestPrintSummaryErrorBased:
         assert "ERROR-BASED" in out
         assert "q" in out
         assert "mysql" in out
-        assert "You have an error" in out
+        assert "You have an error" not in out  # evidence no longer shown in summary
 
     def test_error_based_proof_url_shown_for_get(self):
         r = _empty_result()
@@ -252,7 +252,9 @@ class TestPrintSummaryUnion:
             extracted="some extracted data",
         ))
         out = _capture(r)
-        assert "some extracted data" in out
+        assert "UNION-BASED" in out
+        assert "<marker>" in out          # marker masked in payload
+        assert "some extracted data" not in out  # raw extraction fragment no longer shown
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +293,7 @@ class TestPrintSummaryStacked:
         ))
         out = _capture(r)
         assert "STACKED" in out
-        assert "delay observed" in out
+        assert "delay observed" not in out  # evidence no longer shown in summary
 
 
 # ---------------------------------------------------------------------------

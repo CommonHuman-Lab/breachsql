@@ -325,9 +325,11 @@ def _test_union(
                     param, payload,
                 )
                 continue
+            _disp = re.sub(r"BreachSQL_[A-Za-z0-9]+", "<marker>", payload)
+            _disp = re.sub(r"\bchar\(\d[\d,]+\)", "char(<marker>)", _disp)
             logger.finding(
                 "Union SQLi: %s param=%s cols=%d payload=%s",
-                url, param, col_count, payload,
+                url, param, col_count, _disp,
             )
             result.append_union(UnionFinding(
                 url=url,

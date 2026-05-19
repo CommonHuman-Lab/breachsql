@@ -2,9 +2,20 @@
 # Copyright (c) 2026 CommonHuman-Lab
 from __future__ import annotations
 
+import re as _re
 import urllib.parse as _up
 
 from commonhuman_cli.colour import BOLD, CYAN, DIM, GREEN, RED, YELLOW
+
+_MARKER_RE = _re.compile(r"BreachSQL_[A-Za-z0-9]+")
+_CHAR_RE   = _re.compile(r"\bchar\(\d[\d,]+\)")
+
+
+def _clean_payload(payload: str) -> str:
+    """Replace random marker strings with a stable placeholder."""
+    s = _MARKER_RE.sub("<marker>", payload)
+    s = _CHAR_RE.sub("char(<marker>)", s)
+    return s
 
 
 def _proof_url(url: str, param: str, payload: str, original: str = "1") -> str:
@@ -57,8 +68,6 @@ def print_summary(result) -> None:
             print(f"     Method  : {f.method}")
             print(f"     DBMS    : {f.dbms}")
             print(f"     Payload : {f.payload}")
-            if f.evidence:
-                print(f"     Evidence: {DIM(f.evidence[:120])}")
             if f.method.upper() == "GET":
                 print(f"     Proof   : {CYAN(_proof_url(f.url, f.parameter, f.payload))}")
             print()
@@ -98,9 +107,7 @@ def print_summary(result) -> None:
             print(f"     URL      : {f.url}")
             print(f"     Method   : {f.method}")
             print(f"     Columns  : {f.column_count}")
-            print(f"     Payload  : {f.payload}")
-            if f.extracted:
-                print(f"     Extracted: {DIM(f.extracted[:120])}")
+            print(f"     Payload  : {_clean_payload(f.payload)}")
             if f.method.upper() == "GET":
                 print(f"     Proof   : {CYAN(_proof_url(f.url, f.parameter, f.payload))}")
             print()
@@ -124,8 +131,6 @@ def print_summary(result) -> None:
             print(f"     Method  : {f.method}")
             print(f"     DBMS    : {f.dbms}")
             print(f"     Payload : {f.payload}")
-            if f.evidence:
-                print(f"     Evidence: {DIM(f.evidence[:120])}")
             if f.method.upper() == "GET":
                 print(f"     Proof   : {CYAN(_proof_url(f.url, f.parameter, f.payload))}")
             print()
