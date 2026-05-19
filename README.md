@@ -1,7 +1,11 @@
 # BreachSQL
 
+<p align="center">
+  <img src="assets/BreachSQL_logo.png" alt="BreachSQL" width="300"/>
+</p>
+
 <!-- markdownlint-disable MD033 -->
-<p align="left">
+<p align="center">
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/License-AGPL--3.0-white?style=for-the-badge&logo=opensourceinitiative&logoColor=black" alt="License">
   </a>
