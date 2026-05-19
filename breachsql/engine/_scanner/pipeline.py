@@ -179,6 +179,16 @@ def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> 
     else:
         pass  # crawler not enabled; surfaces already built from URL params and POST data
 
+    # Deduplicate: the BFS crawler re-visits the seed URL, re-adding its params.
+    _seen_surfaces: set = set()
+    _deduped: list = []
+    for _s in surfaces:
+        _key = (_s["url"], _s["method"], _s["single_param"])
+        if _key not in _seen_surfaces:
+            _seen_surfaces.add(_key)
+            _deduped.append(_s)
+    surfaces = _deduped
+
     if surfaces:
         logger.info("%d injectable surface(s) identified", len(surfaces))
     else:
