@@ -1,10 +1,20 @@
 # BreachSQL
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
-[![PyPI](https://img.shields.io/pypi/v/breachsql.svg)](https://pypi.org/project/breachsql/)
-[![License](https://img.shields.io/badge/License-AGPLv3-green.svg)](LICENSE)
-[![Security](https://img.shields.io/badge/Security-SQL%20Injection%20Scanner-red.svg)](https://github.com/CommonHuman-Lab/breachsql)
-[![WAF Evasion](https://img.shields.io/badge/WAF%20Evasion-built--in-orange.svg)](https://github.com/CommonHuman-Lab/breachsql)
+<!-- markdownlint-disable MD033 -->
+<p align="left">
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/License-AGPL--3.0-white?style=for-the-badge&logo=opensourceinitiative&logoColor=black" alt="License">
+  </a>
+  <a href="https://www.python.org/">
+    <img src="https://img.shields.io/badge/Python-3.10+-black?style=for-the-badge&logo=python&logoColor=white" alt="Python">
+  </a>
+  <img src="https://img.shields.io/badge/Platform-Linux-white?style=for-the-badge&logo=linux&logoColor=black" alt="Platform">
+  <a href="https://github.com/CommonHuman-Lab/breachsql/releases">
+    <img src="https://img.shields.io/badge/Version-0.1.4-black?style=for-the-badge&logo=semver&logoColor=white" alt="Version">
+  </a>
+  <img src="https://img.shields.io/badge/SQL%20Injection-5%20Techniques-white?style=for-the-badge&logo=postgresql&logoColor=black" alt="SQL Injection">
+</p>
+<!-- markdownlint-enable MD033 -->
 
 **Fast SQL injection scanner with built-in exploitation** — detect and extract in one command, across all major backends, with WAF evasion baked in. No Java. No license. Drops into a Python pipeline.
 
@@ -170,6 +180,16 @@ pip install -e ".[dev]"   # + pytest, mypy, ruff
 ```
 
 Requires Python 3.10+. No C extensions. On Kali and other Debian-based systems, the virtual env is required — system Python is externally managed.
+
+---
+
+## Legal & Ethical Use
+
+Only run BreachSQL against applications you own or have explicit written authorization to test. Authorized use includes penetration testing engagements, bug bounty programs within defined scope, and CTF competitions.
+
+`--exploit` and `--dump` extract live database content — only use them where data extraction is explicitly permitted by your engagement scope.
+
+The authors accept no liability for unauthorized or illegal use.
 
 ---
 
