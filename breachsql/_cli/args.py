@@ -124,6 +124,7 @@ def interactive_prompts() -> argparse.Namespace:
         exploit=exploit,
         dump=dump,
         dump_all=False,
+        report_html="",
     )
 
 
@@ -220,5 +221,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Dump all rows from TABLE using a confirmed injection point (implies --exploit)")
     p.add_argument("--dump-all", action="store_true", default=False, dest="dump_all",
                    help="Dump every table discovered during extraction (implies --exploit)")
+
+    # --- Reports ---
+    p.add_argument("--report-html", default="", dest="report_html", metavar="FILE",
+                   help="Write a self-contained HTML report to this file")
 
     return p

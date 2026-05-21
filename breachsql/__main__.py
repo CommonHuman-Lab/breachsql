@@ -238,6 +238,23 @@ def main() -> None:
         print()
         print_summary(combined)
 
+    # ── HTML report ───────────────────────────────────────────────────────────
+    _report_html = getattr(args, "report_html", "")
+    if _report_html and all_results:
+        from commonhuman_cli.report_html import render_html as _render_html
+        try:
+            _html_str = _render_html(
+                results=[r.to_dict() for r in all_results],
+                tool_name="BreachSQL",
+                tool_version=__import__("breachsql").__version__,
+            )
+            with open(_report_html, "w", encoding="utf-8") as _fh:
+                _fh.write(_html_str)
+            if not args.json_output and not args.quiet:
+                print(f"[+] HTML report written to {_report_html}")
+        except OSError as _exc:
+            print(f"[!] Cannot write HTML report: {_exc}", file=sys.stderr)
+
     if args.json_output:
         sys.exit(0 if not any_findings else 1)
 
