@@ -254,7 +254,10 @@ def main() -> None:
         from commonhuman_cli.report_html import render_html as _render_html
         try:
             _html_str = _render_html(
-                results=[r.to_dict() for r in all_results],
+                results=[
+                    {**r.to_dict(), "table_dumps": r.dumps_to_dict()["table_dumps"]}
+                    for r in all_results
+                ],
                 tool_name="BreachSQL",
                 tool_version=__import__("breachsql").__version__,
             )
