@@ -26,6 +26,7 @@ for _p in (_PARENT, _HERE):
 
 from breachsql import BANNER
 from breachsql.engine import scan, ScanOptions
+from breachsql.engine.scanner import _unique_stem, _output_stem
 from breachsql.engine.log import get_logger
 from breachsql._cli.args import build_parser, interactive_prompts
 from breachsql._cli.summary import print_summary
@@ -154,6 +155,13 @@ def main() -> None:
             args.output = os.path.join(_host, _host)
         if not getattr(args, "report_html", "") and args.output:
             args.report_html = args.output + ".html"
+
+    # Resolve collision-free stem once for the whole session so that every
+    # scan() call in the crawl loop writes to the same base name.
+    if args.output:
+        args.output = _unique_stem(_output_stem(args.output))
+    if getattr(args, "report_html", ""):
+        args.report_html = _unique_stem(_output_stem(args.report_html)) + ".html"
 
     opts = ScanOptions(
         crawl=args.crawl,
