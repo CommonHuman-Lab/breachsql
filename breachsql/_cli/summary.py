@@ -2,10 +2,14 @@
 # Copyright (c) 2026 CommonHuman-Lab
 from __future__ import annotations
 
+import io
 import re as _re
+import sys
 import urllib.parse as _up
 
 from commonhuman_cli.colour import BOLD, CYAN, DIM, GREEN, RED, YELLOW
+
+_ANSI_RE = _re.compile(r"\x1b\[[0-9;]*m")
 
 _MARKER_RE = _re.compile(r"BreachSQL_[A-Za-z0-9]+")
 _CHAR_RE   = _re.compile(r"\bchar\(\d[\d,]+\)")
@@ -180,3 +184,14 @@ def print_summary(result) -> None:
             print(f"    - {e}")
 
     print(BOLD("=" * 60))
+
+
+def format_summary(result) -> str:
+    """Return print_summary output as a plain string with ANSI codes stripped."""
+    buf = io.StringIO()
+    old, sys.stdout = sys.stdout, buf
+    try:
+        print_summary(result)
+    finally:
+        sys.stdout = old
+    return _ANSI_RE.sub("", buf.getvalue())

@@ -51,17 +51,23 @@ def scan(url: str, options: ScanOptions | None = None) -> ScanResult:
         result.finish()
 
     if options.output:
+        stem = os.path.splitext(options.output)[0]
         try:
-            with open(options.output, "w", encoding="utf-8") as fh:
+            with open(stem + ".json", "w", encoding="utf-8") as fh:
                 json.dump(result.to_dict(), fh, indent=2)
         except OSError as exc:
-            result.append_error(f"Failed to write output file: {exc}")
+            result.append_error(f"Failed to write JSON output: {exc}")
+        try:
+            from breachsql._cli.summary import format_summary
+            with open(stem + ".txt", "w", encoding="utf-8") as fh:
+                fh.write(format_summary(result))
+        except OSError as exc:
+            result.append_error(f"Failed to write text output: {exc}")
 
     if options.output and result.table_dumps:
-        base, ext = os.path.splitext(options.output)
-        dump_path = base + "_dump" + (ext or ".json")
+        stem = os.path.splitext(options.output)[0]
         try:
-            with open(dump_path, "w", encoding="utf-8") as fh:
+            with open(stem + "_dump.json", "w", encoding="utf-8") as fh:
                 json.dump(result.dumps_to_dict(), fh, indent=2)
         except OSError as exc:
             result.append_error(f"Failed to write dump file: {exc}")

@@ -188,8 +188,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Comma-separated HTTP header names to inject as SQLi surfaces")
 
     # --- Output ---
-    p.add_argument("-o", "--output", default="", metavar="FILE",
-                   help="Write JSON results to this file")
+    p.add_argument("-o", "--output", default="", metavar="NAME",
+                   help="Output stem — writes <name>.json and <name>.txt")
     p.add_argument("--json",     action="store_true", dest="json_output",
                    help="Output raw JSON")
     p.add_argument("-q", "--quiet",   action="store_true",
