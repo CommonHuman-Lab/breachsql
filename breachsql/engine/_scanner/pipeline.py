@@ -249,6 +249,17 @@ def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> 
     else:
         pass  # crawler not enabled; surfaces already built from URL params and POST data
 
+     # Deduplicate: the BFS crawler re-visits the seed URL, re-adding its params.
+    _seen_surfaces: set = set()
+    _deduped: list = []
+    for _s in surfaces:
+        _key = (_s["url"], _s["method"], _s["single_param"])
+        if _key not in _seen_surfaces:
+            _seen_surfaces.add(_key)
+            _deduped.append(_s)
+    surfaces = _deduped
+
+
     if surfaces:
         logger.info("%d injectable surface(s) identified", len(surfaces))
     else:
@@ -484,6 +495,34 @@ def _run_exploit(
                 _tables: List[str] = []
                 if _dump_all:
                     _tables = _csv_items(extracted_map.get("tables", ""))
+                    if not _tables and result.dbms_detected and result.dbms_detected != dbms:
+                        for _label, _expr in get_extraction_targets(result.dbms_detected):
+                            if _label != "tables":
+                                continue
+                            try:
+                                _tables_value = extract_via_union(
+                                    expr=_expr,
+                                    union_finding=union_finding,
+                                    surface=surface,
+                                    evasions=evasions,
+                                    opts=opts,
+                                    injector=injector,
+                                )
+                            except Exception as exc:
+                                result.append_error(f"Table extraction retry failed ({result.dbms_detected}): {exc}")
+                                break
+                            if _tables_value:
+                                dbms = result.dbms_detected
+                                _tables = _csv_items(_tables_value)
+                                result.extracted.append(ExtractionFinding(
+                                    url=union_finding.url,
+                                    parameter=union_finding.parameter,
+                                    method=union_finding.method,
+                                    expr=_expr,
+                                    value=_tables_value,
+                                    mode="union",
+                                ))
+                            break
                 else:
                     _tbl = _dump_raw.split(":", 1)[0].strip()
                     if _tbl:

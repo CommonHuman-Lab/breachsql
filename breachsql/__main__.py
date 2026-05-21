@@ -14,6 +14,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import csv
+import io
 import json
 import os
 import re
@@ -119,6 +120,13 @@ def _build_readable_dump_text(target: str, extracted: list[dict]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _parse_dump_row(row: str) -> list[str]:
+    try:
+        return next(csv.reader(io.StringIO(row)))
+    except Exception:
+        return [cell.strip() for cell in row.split(",")]
+
+
 def _extract_structured_tables(extracted: list[dict]) -> dict[str, dict]:
     """Infer table -> columns/rows from extracted expressions/values."""
     table_map: dict[str, dict] = {}
@@ -127,21 +135,10 @@ def _extract_structured_tables(extracted: list[dict]) -> dict[str, dict]:
         table_map.setdefault(name, {"columns": [], "rows": []})
         return table_map[name]
 
-    _meta_markers = (
-        "information_schema.",
-        "sqlite_master",
-        "pragma_table_info(",
-        "all_tab_columns",
-    )
-
     for item in extracted:
         expr = str(item.get("expr", ""))
         value = str(item.get("value", ""))
         expr_l = expr.lower()
-
-        # Skip schema/metadata extraction entries.
-        if any(m in expr_l for m in _meta_markers):
-            continue
 
         m_cols = re.search(r"pragma_table_info\('([^']+)'\)", expr, flags=re.IGNORECASE)
         if not m_cols:
@@ -156,6 +153,11 @@ def _extract_structured_tables(extracted: list[dict]) -> dict[str, dict]:
             _get_tbl(tbl)["columns"] = cols
             continue
 
+        if ("information_schema." in expr_l
+                or "sqlite_master" in expr_l
+                or "all_tab_columns" in expr_l):
+            continue
+
         m_dump = re.search(
             r'FROM\s+["`\[]?([A-Za-z0-9_.-]+)["`\]]?\s+(?:LIMIT|WHERE|GROUP|ORDER|TOP)',
             expr,
@@ -166,7 +168,7 @@ def _extract_structured_tables(extracted: list[dict]) -> dict[str, dict]:
             if tbl.lower() in ("information_schema", "sqlite_master"):
                 continue
             rows = [r for r in value.split("|") if r]
-            parsed_rows = [[cell.strip() for cell in row.split(",")] for row in rows]
+            parsed_rows = [_parse_dump_row(row) for row in rows]
             _get_tbl(tbl)["rows"] = parsed_rows
             continue
 
@@ -394,9 +396,29 @@ def main() -> None:
                 print(f"  [+] {result.total_findings} finding(s) — {target_url}")
         else:
             print_summary(result)
+         
 
     if not args.json_output and multi:
-        combined = _build_combined_result(urls, all_results)
+        # Merge all results into one combined summary
+        from .engine.reporter import ScanResult
+        combined = ScanResult(target=urls[0])
+        combined.duration_s      = sum(r.duration_s for r in all_results)
+        combined.requests_sent   = sum(r.requests_sent for r in all_results)
+        combined.crawled_urls    = sum(r.crawled_urls for r in all_results)
+        combined.params_tested   = sum(r.params_tested for r in all_results)
+        combined.waf_detected    = next((r.waf_detected for r in all_results if r.waf_detected), None)
+        combined.evasion_applied = next((r.evasion_applied for r in all_results if r.evasion_applied), None)
+        combined.dbms_detected   = next((r.dbms_detected for r in all_results if r.dbms_detected), None)
+        for r in all_results:
+            combined.error_based.extend(r.error_based)
+            combined.boolean_based.extend(r.boolean_based)
+            combined.time_based.extend(r.time_based)
+            combined.union_based.extend(r.union_based)
+            combined.oob.extend(r.oob)
+            combined.stacked.extend(r.stacked)
+            combined.extracted.extend(r.extracted)
+            combined.errors.extend(r.errors)
+        combined.target = f"{urls[0]} (+{len(urls)-1} more)" if len(urls) > 1 else urls[0]
         print()
         print_summary(combined)
 
