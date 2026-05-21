@@ -40,6 +40,7 @@ class ScanOptions:
         header_params:    list[str] | None  = None,     # HTTP header names to inject into
         exploit:          bool              = False,     # extract version/user/db/tables after scan
         dump:             str               = "",        # table name to dump rows from
+        dump_columns:     str               = "",        # table name to list columns from
     ) -> None:
         # Shared
         self.crawl            = crawl
@@ -78,6 +79,7 @@ class ScanOptions:
         self.header_params    = header_params or []
         self.exploit          = exploit
         self.dump             = dump.strip()
+        self.dump_columns     = dump_columns.strip()
 
     # Convenience: check which techniques are enabled
     @property

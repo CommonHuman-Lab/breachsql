@@ -82,7 +82,8 @@ def interactive_prompts() -> argparse.Namespace:
 
     _section("Exploitation  (optional)")
     exploit = _prompt_bool("  Extract data after finding SQLi", default=False)
-    dump    = _prompt("  Dump table", hint="table name to dump rows from (blank to skip)") if exploit else ""
+    dump    = _prompt("  Dump table", hint="users OR users:email,password OR all (blank to skip)") if exploit else ""
+    dump_columns = _prompt("  Dump columns", hint="table name to list columns from (blank to skip)") if exploit else ""
     print()
 
     return argparse.Namespace(
@@ -123,6 +124,7 @@ def interactive_prompts() -> argparse.Namespace:
         browser_crawl=False,
         exploit=exploit,
         dump=dump,
+        dump_columns=dump_columns,
     )
 
 
@@ -216,6 +218,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--exploit", action="store_true", default=False,
                    help="After finding SQLi, extract version / current user / database / tables")
     p.add_argument("--dump", default="", metavar="TABLE",
-                   help="Dump all rows from TABLE using a confirmed injection point (implies --exploit)")
+                   help="Dump row values using a confirmed injection point. "
+                        "Supports TABLE, TABLE:col1,col2, or all (implies --exploit)")
+    p.add_argument("--dump-columns", default="", dest="dump_columns", metavar="TABLE",
+                   help="Dump column names for TABLE using a confirmed injection point (implies --exploit)")
+    p.add_argument("--dump-readable", action="store_true", dest="dump_readable",
+                   help="Print a readable per-table dump view in terminal and save one consolidated text file")
 
     return p

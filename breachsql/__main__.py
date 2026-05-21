@@ -12,11 +12,14 @@ Usage:
 from __future__ import annotations
 
 import copy
+import dataclasses
+import csv
 import json
 import os
 import re
 import sys
 import urllib.parse as _up
+from datetime import datetime
 
 _HERE   = os.path.dirname(os.path.abspath(__file__))
 _PARENT = os.path.dirname(_HERE)
@@ -46,6 +49,186 @@ def _split_param_list(val) -> list[str]:
     if isinstance(val, list):
         return [p.strip() for p in val if str(p).strip()]
     return [p.strip() for p in str(val).split(",") if p.strip()]
+
+
+def _safe_target_name(url: str) -> str:
+    """Build a filesystem-safe target name for output files."""
+    parsed = _up.urlparse(url)
+    base = f"{parsed.netloc}{parsed.path}".strip() or "unknown"
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("_")
+    return cleaned or "unknown"
+
+
+def _build_readable_dump_text(target: str, extracted: list[dict]) -> str:
+    """Build one human-readable per-table dump text from extracted entries."""
+    table_map = _extract_structured_tables(extracted)
+    lines: list[str] = []
+    lines.append(f"Target: {target}")
+    lines.append("")
+    tables = list(table_map.keys())
+    if not tables:
+        lines.append("No structured table/column/row dump entries detected.")
+        lines.append("")
+        lines.append("Raw extracted values:")
+        if not extracted:
+            lines.append("(none)")
+        else:
+            for item in extracted:
+                expr = str(item.get("expr", "")).strip()
+                value = str(item.get("value", "")).strip()
+                lines.append(f"- expr: {expr}")
+                lines.append(f"  value: {value}")
+        return "\n".join(lines) + "\n"
+
+    for tbl in tables:
+        data = table_map.get(tbl, {"columns": [], "rows": []})
+        cols = data.get("columns", []) or []
+        rows = data.get("rows", []) or []
+        if not cols and rows:
+            cols = [f"col_{i+1}" for i in range(max(len(r) for r in rows))]
+
+        lines.append(f"Table: {tbl}")
+        if rows:
+            lines.append(f"[{len(rows)} entries]")
+            matrix: list[list[str]] = [cols] + rows
+            col_count = max(len(r) for r in matrix)
+            widths = [0] * col_count
+            for r in matrix:
+                for i in range(col_count):
+                    cell = r[i] if i < len(r) else ""
+                    widths[i] = max(widths[i], len(str(cell)))
+            sep = "+" + "+".join("-" * (w + 2) for w in widths) + "+"
+
+            def fmt_row(r: list[str]) -> str:
+                cells = []
+                for i in range(col_count):
+                    cell = r[i] if i < len(r) else ""
+                    cells.append(f" {cell.ljust(widths[i])} ")
+                return "|" + "|".join(cells) + "|"
+
+            lines.append(sep)
+            lines.append(fmt_row(cols))
+            lines.append(sep)
+            for r in rows:
+                lines.append(fmt_row(r))
+            lines.append(sep)
+        else:
+            lines.append("Rows: (not extracted)")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _extract_structured_tables(extracted: list[dict]) -> dict[str, dict]:
+    """Infer table -> columns/rows from extracted expressions/values."""
+    table_map: dict[str, dict] = {}
+
+    def _get_tbl(name: str) -> dict:
+        table_map.setdefault(name, {"columns": [], "rows": []})
+        return table_map[name]
+
+    _meta_markers = (
+        "information_schema.",
+        "sqlite_master",
+        "pragma_table_info(",
+        "all_tab_columns",
+    )
+
+    for item in extracted:
+        expr = str(item.get("expr", ""))
+        value = str(item.get("value", ""))
+        expr_l = expr.lower()
+
+        # Skip schema/metadata extraction entries.
+        if any(m in expr_l for m in _meta_markers):
+            continue
+
+        m_cols = re.search(r"pragma_table_info\('([^']+)'\)", expr, flags=re.IGNORECASE)
+        if not m_cols:
+            m_cols = re.search(r"table_name='([^']+)'", expr, flags=re.IGNORECASE)
+        if not m_cols:
+            m_cols = re.search(r"TABLE_NAME='([^']+)'", expr, flags=re.IGNORECASE)
+        if not m_cols:
+            m_cols = re.search(r"table_name=UPPER\('([^']+)'\)", expr, flags=re.IGNORECASE)
+        if m_cols:
+            tbl = m_cols.group(1)
+            cols = [c.strip() for c in value.split(",") if c.strip()]
+            _get_tbl(tbl)["columns"] = cols
+            continue
+
+        m_dump = re.search(
+            r'FROM\s+["`\[]?([A-Za-z0-9_.-]+)["`\]]?\s+(?:LIMIT|WHERE|GROUP|ORDER|TOP)',
+            expr,
+            flags=re.IGNORECASE,
+        )
+        if m_dump and ("GROUP_CONCAT" in expr or "string_agg" in expr or "STRING_AGG" in expr or "LISTAGG" in expr):
+            tbl = m_dump.group(1)
+            if tbl.lower() in ("information_schema", "sqlite_master"):
+                continue
+            rows = [r for r in value.split("|") if r]
+            parsed_rows = [[cell.strip() for cell in row.split(",")] for row in rows]
+            _get_tbl(tbl)["rows"] = parsed_rows
+            continue
+
+    return table_map
+
+
+def _combine_results(urls: list[str], all_results: list) -> object:
+    """Return a combined JSON-serialisable view across all scan results."""
+    from .engine.reporter import ScanResult
+
+    if len(all_results) == 1:
+        return all_results[0].to_dict()
+
+    combined = ScanResult(target=urls[0] if urls else "")
+    combined.duration_s      = sum(r.duration_s for r in all_results)
+    combined.requests_sent   = sum(r.requests_sent for r in all_results)
+    combined.crawled_urls    = sum(r.crawled_urls for r in all_results)
+    combined.params_tested   = sum(r.params_tested for r in all_results)
+    combined.waf_detected    = next((r.waf_detected for r in all_results if r.waf_detected), None)
+    combined.evasion_applied = next((r.evasion_applied for r in all_results if r.evasion_applied), None)
+    combined.dbms_detected   = next((r.dbms_detected for r in all_results if r.dbms_detected), None)
+    for r in all_results:
+        combined.error_based.extend(r.error_based)
+        combined.boolean_based.extend(r.boolean_based)
+        combined.time_based.extend(r.time_based)
+        combined.union_based.extend(r.union_based)
+        combined.oob.extend(r.oob)
+        combined.stacked.extend(r.stacked)
+        combined.extracted.extend(r.extracted)
+        combined.errors.extend(r.errors)
+    combined.target = f"{urls[0]} (+{len(urls)-1} more)" if len(urls) > 1 else (urls[0] if urls else "")
+
+    return {
+        "mode": "multi-target",
+        "targets": [r.to_dict() for r in all_results],
+        "combined": combined.to_dict(),
+    }
+
+
+def _build_combined_result(urls: list[str], all_results: list):
+    """Build a combined ScanResult for human-readable multi-target summary."""
+    from .engine.reporter import ScanResult
+
+    combined = ScanResult(target=urls[0] if urls else "")
+    combined.duration_s      = sum(r.duration_s for r in all_results)
+    combined.requests_sent   = sum(r.requests_sent for r in all_results)
+    combined.crawled_urls    = sum(r.crawled_urls for r in all_results)
+    combined.params_tested   = sum(r.params_tested for r in all_results)
+    combined.waf_detected    = next((r.waf_detected for r in all_results if r.waf_detected), None)
+    combined.evasion_applied = next((r.evasion_applied for r in all_results if r.evasion_applied), None)
+    combined.dbms_detected   = next((r.dbms_detected for r in all_results if r.dbms_detected), None)
+    for r in all_results:
+        combined.error_based.extend(r.error_based)
+        combined.boolean_based.extend(r.boolean_based)
+        combined.time_based.extend(r.time_based)
+        combined.union_based.extend(r.union_based)
+        combined.oob.extend(r.oob)
+        combined.stacked.extend(r.stacked)
+        combined.extracted.extend(r.extracted)
+        combined.errors.extend(r.errors)
+    combined.target = f"{urls[0]} (+{len(urls)-1} more)" if len(urls) > 1 else (urls[0] if urls else "")
+    return combined
 
 
 def main() -> None:
@@ -157,7 +340,7 @@ def main() -> None:
         level=args.level,
         max_pages=args.max_pages,
         max_depth=args.max_depth,
-        output=args.output,
+        output="",
         exclude_patterns=exclude_patterns,
         dbms=args.dbms,
         technique=args.technique,
@@ -168,8 +351,11 @@ def main() -> None:
         path_params=_split_param_list(getattr(args, "path_params", "")),
         cookie_params=_split_param_list(getattr(args, "cookie_params", "")),
         header_params=_split_param_list(getattr(args, "header_params", "")),
-        exploit=getattr(args, "exploit", False) or bool(getattr(args, "dump", "")),
+        exploit=(getattr(args, "exploit", False)
+                 or bool(getattr(args, "dump", ""))
+                 or bool(getattr(args, "dump_columns", ""))),
         dump=getattr(args, "dump", ""),
+        dump_columns=getattr(args, "dump_columns", ""),
     )
 
     all_results = []
@@ -210,28 +396,81 @@ def main() -> None:
             print_summary(result)
 
     if not args.json_output and multi:
-        # Merge all results into one combined summary
-        from .engine.reporter import ScanResult
-        combined = ScanResult(target=urls[0])
-        combined.duration_s      = sum(r.duration_s for r in all_results)
-        combined.requests_sent   = sum(r.requests_sent for r in all_results)
-        combined.crawled_urls    = sum(r.crawled_urls for r in all_results)
-        combined.params_tested   = sum(r.params_tested for r in all_results)
-        combined.waf_detected    = next((r.waf_detected for r in all_results if r.waf_detected), None)
-        combined.evasion_applied = next((r.evasion_applied for r in all_results if r.evasion_applied), None)
-        combined.dbms_detected   = next((r.dbms_detected for r in all_results if r.dbms_detected), None)
-        for r in all_results:
-            combined.error_based.extend(r.error_based)
-            combined.boolean_based.extend(r.boolean_based)
-            combined.time_based.extend(r.time_based)
-            combined.union_based.extend(r.union_based)
-            combined.oob.extend(r.oob)
-            combined.stacked.extend(r.stacked)
-            combined.extracted.extend(r.extracted)
-            combined.errors.extend(r.errors)
-        combined.target = f"{urls[0]} (+{len(urls)-1} more)" if len(urls) > 1 else urls[0]
+        combined = _build_combined_result(urls, all_results)
         print()
         print_summary(combined)
+
+    if args.output and all_results:
+        output_payload = _combine_results(urls, all_results)
+        try:
+            with open(args.output, "w", encoding="utf-8") as fh:
+                json.dump(output_payload, fh, indent=2)
+        except OSError as exc:
+            _cli_logger.error("Failed to write output file '%s': %s", args.output, exc)
+
+    # Always persist extracted data (if present) under .venv/output with target-prefixed names.
+    extracted_results = [r for r in all_results if getattr(r, "extracted", None)]
+    if extracted_results:
+        out_dir = os.path.join(sys.prefix, "output")
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+        except OSError as exc:
+            _cli_logger.error("Failed to create output directory '%s': %s", out_dir, exc)
+        else:
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            for r in extracted_results:
+                target_name = _safe_target_name(getattr(r, "target", ""))
+                out_path = os.path.join(out_dir, f"target_{target_name}_{stamp}.json")
+                payload = {
+                    "target": r.target,
+                    "dbms_detected": getattr(r, "dbms_detected", None),
+                    "duration_s": getattr(r, "duration_s", 0.0),
+                    "requests_sent": getattr(r, "requests_sent", 0),
+                    "params_tested": getattr(r, "params_tested", 0),
+                    "total_findings": getattr(r, "total_findings", 0),
+                    "extracted": [dataclasses.asdict(e) for e in r.extracted],
+                }
+                try:
+                    with open(out_path, "w", encoding="utf-8") as fh:
+                        json.dump(payload, fh, indent=2)
+                except OSError as exc:
+                    _cli_logger.error("Failed to write extracted output file '%s': %s", out_path, exc)
+
+                readable_text = _build_readable_dump_text(
+                    target=r.target,
+                    extracted=payload["extracted"],
+                )
+                readable_path = os.path.join(out_dir, f"target_{target_name}_{stamp}_dump.txt")
+                try:
+                    with open(readable_path, "w", encoding="utf-8") as fh:
+                        fh.write(readable_text)
+                except OSError as exc:
+                    _cli_logger.error("Failed to write readable dump file '%s': %s", readable_path, exc)
+                else:
+                    if getattr(args, "dump_readable", False):
+                        print(readable_text)
+
+                # Also save consolidated CSV in long format for reliable parsing.
+                # Columns: table,row_index,column,value
+                csv_path = os.path.join(out_dir, f"target_{target_name}_{stamp}_dump.csv")
+                table_map = _extract_structured_tables(payload["extracted"])
+                try:
+                    with open(csv_path, "w", encoding="utf-8", newline="") as fh:
+                        w = csv.writer(fh)
+                        w.writerow(["table", "row_index", "column", "value"])
+                        for tbl, data in table_map.items():
+                            cols = data.get("columns", []) or []
+                            rows = data.get("rows", []) or []
+                            for idx, row in enumerate(rows, start=1):
+                                if cols:
+                                    for c_i, cell in enumerate(row):
+                                        col = cols[c_i] if c_i < len(cols) else f"col_{c_i + 1}"
+                                        w.writerow([tbl, idx, col, cell])
+                                else:
+                                    for c_i, cell in enumerate(row):
+                                        w.writerow([tbl, idx, f"col_{c_i + 1}", cell])
+                except OSError as exc:
+                    _cli_logger.error("Failed to write consolidated CSV dump file '%s': %s", csv_path, exc)
 
     if args.json_output:
         sys.exit(0 if not any_findings else 1)
