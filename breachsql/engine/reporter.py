@@ -135,6 +135,16 @@ _FINDING_LISTS: List[tuple[str, FindingType]] = [
     ("extracted",     FindingType.EXTRACTION),
 ]
 
+_FINDING_SEVERITY: dict[FindingType, str] = {
+    FindingType.ERROR_BASED:  "high",
+    FindingType.BOOLEAN:      "high",
+    FindingType.TIME_BASED:   "high",
+    FindingType.UNION_BASED:  "high",
+    FindingType.OOB:          "high",
+    FindingType.STACKED:      "critical",
+    FindingType.EXTRACTION:   "critical",
+}
+
 
 # ---------------------------------------------------------------------------
 # Top-level ScanResult
@@ -182,7 +192,8 @@ class ScanResult(ScanResultBase):
         for attr, ftype in _FINDING_LISTS:
             for item in getattr(self, attr):
                 d = dataclasses.asdict(item)
-                d["type"] = ftype.value
+                d["type"]     = ftype.value
+                d["severity"] = _FINDING_SEVERITY.get(ftype, "info")
                 findings.append(d)
 
         result = self._base_dict()
