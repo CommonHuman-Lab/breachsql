@@ -216,7 +216,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- Exploitation ---
     p.add_argument("--exploit", action="store_true", default=False,
-                   help="After finding SQLi, extract version / current user / database / tables")
+                   help="After finding SQLi, dump all tables and write <host>.txt, <host>.json, <host>.html")
     p.add_argument("--dump", default="", metavar="TABLE",
                    help="Dump all rows from TABLE using a confirmed injection point (implies --exploit)")
     p.add_argument("--dump-all", action="store_true", default=False, dest="dump_all",

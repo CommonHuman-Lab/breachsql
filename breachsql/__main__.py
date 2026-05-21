@@ -145,6 +145,16 @@ def main() -> None:
         if not args.quiet and not args.json_output:
             print(f"[*] Browser crawl: {len(new_bc)} additional endpoint(s) queued")
 
+    # --exploit implies --dump-all + auto-named outputs under <host>/ directory
+    if getattr(args, "exploit", False):
+        args.dump_all = True
+        if not args.output and urls:
+            _host = _up.urlparse(urls[0]).hostname or "target"
+            os.makedirs(_host, exist_ok=True)
+            args.output = os.path.join(_host, _host)
+        if not getattr(args, "report_html", "") and args.output:
+            args.report_html = args.output + ".html"
+
     opts = ScanOptions(
         crawl=args.crawl,
         data=args.data,
