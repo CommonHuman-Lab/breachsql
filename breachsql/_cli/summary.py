@@ -15,6 +15,34 @@ _MARKER_RE = _re.compile(r"BreachSQL_[A-Za-z0-9]+")
 _CHAR_RE   = _re.compile(r"\bchar\(\d[\d,]+\)")
 
 
+def _ascii_table(columns: list[str], rows: list[list], max_col_w: int = 55) -> list[str]:
+    """Return lines for a bordered ASCII table."""
+    widths = [len(c) for c in columns]
+    for row in rows:
+        for i, cell in enumerate(row):
+            if i < len(widths):
+                widths[i] = min(max_col_w, max(widths[i], len(str(cell))))
+
+    def border() -> str:
+        return "+" + "+".join("-" * (w + 2) for w in widths) + "+"
+
+    def fmt_row(cells: list) -> str:
+        parts = []
+        for i, cell in enumerate(cells):
+            w = widths[i] if i < len(widths) else 0
+            s = str(cell)
+            if len(s) > w:
+                s = s[:w - 3] + "..."
+            parts.append(f" {s.ljust(w)} ")
+        return "|" + "|".join(parts) + "|"
+
+    lines = [border(), fmt_row(columns), border()]
+    for row in rows:
+        lines.append(fmt_row(row))
+    lines.append(border())
+    return lines
+
+
 def _clean_payload(payload: str) -> str:
     """Replace random marker strings with a stable placeholder."""
     s = _MARKER_RE.sub("<marker>", payload)
@@ -158,24 +186,15 @@ def print_summary(result) -> None:
             print(f"  {GREEN('─' * 56)}")
             print(f"  {GREEN(BOLD('  Table Dumps'))}")
             print(f"  {GREEN('─' * 56)}")
+            _MAX_DISPLAY = 20
             for td in result.table_dumps:
                 print(f"  {GREEN('[DUMP]')} {BOLD(td.table)}"
                       f"  ({len(td.rows)} row(s))  param:{td.parameter}")
-                if td.columns:
-                    header = " | ".join(td.columns)
-                    sep    = "-+-".join("-" * len(c) for c in td.columns)
-                    print(f"     {BOLD(header)}")
-                    print(f"     {DIM(sep)}")
-                _MAX_DISPLAY = 20
-                for row in td.rows[:_MAX_DISPLAY]:
-                    # Pad each cell to its column header width
-                    cells = [
-                        str(v)[:40].ljust(len(td.columns[ci]) if ci < len(td.columns) else 0)
-                        for ci, v in enumerate(row)
-                    ]
-                    print(f"     {' | '.join(cells)}")
+                display_rows = td.rows[:_MAX_DISPLAY]
+                for line in _ascii_table(td.columns, display_rows):
+                    print(f"  {line}")
                 if len(td.rows) > _MAX_DISPLAY:
-                    print(f"     {DIM(f'... {len(td.rows) - _MAX_DISPLAY} more row(s) in dump file')}")
+                    print(f"  {DIM(f'  ... {len(td.rows) - _MAX_DISPLAY} more row(s) in dump file')}")
                 print()
 
     if result.errors:
