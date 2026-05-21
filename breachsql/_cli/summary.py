@@ -150,6 +150,30 @@ def print_summary(result) -> None:
                 print()
                 i += 1
 
+        if result.table_dumps:
+            print(f"  {GREEN('─' * 56)}")
+            print(f"  {GREEN(BOLD('  Table Dumps'))}")
+            print(f"  {GREEN('─' * 56)}")
+            for td in result.table_dumps:
+                print(f"  {GREEN('[DUMP]')} {BOLD(td.table)}"
+                      f"  ({len(td.rows)} row(s))  param:{td.parameter}")
+                if td.columns:
+                    header = " | ".join(td.columns)
+                    sep    = "-+-".join("-" * len(c) for c in td.columns)
+                    print(f"     {BOLD(header)}")
+                    print(f"     {DIM(sep)}")
+                _MAX_DISPLAY = 20
+                for row in td.rows[:_MAX_DISPLAY]:
+                    # Pad each cell to its column header width
+                    cells = [
+                        str(v)[:40].ljust(len(td.columns[ci]) if ci < len(td.columns) else 0)
+                        for ci, v in enumerate(row)
+                    ]
+                    print(f"     {' | '.join(cells)}")
+                if len(td.rows) > _MAX_DISPLAY:
+                    print(f"     {DIM(f'... {len(td.rows) - _MAX_DISPLAY} more row(s) in dump file')}")
+                print()
+
     if result.errors:
         print(RED("  Errors:"))
         for e in result.errors:

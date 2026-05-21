@@ -110,6 +110,17 @@ class ExtractionFinding:
     mode:      str
 
 
+@dataclass
+class TableDumpFinding:
+    """Rows extracted from a table via table dump."""
+    table:     str
+    columns:   List[str]
+    rows:      List[List[str]]
+    url:       str
+    parameter: str
+    method:    str
+
+
 # ---------------------------------------------------------------------------
 # Finding type → list attribute mapping
 # ---------------------------------------------------------------------------
@@ -142,6 +153,7 @@ class ScanResult(ScanResultBase):
     oob:           List[OOBFinding]        = field(default_factory=list)
     stacked:       List[StackedFinding]    = field(default_factory=list)
     extracted:     List[ExtractionFinding] = field(default_factory=list)
+    table_dumps:   List[TableDumpFinding]  = field(default_factory=list)
 
     # --- Append helpers -------------------------------------------------------
 
@@ -178,3 +190,8 @@ class ScanResult(ScanResultBase):
         result["total_findings"] = self.total_findings
         result["findings"] = findings
         return result
+
+    def dumps_to_dict(self) -> Dict[str, Any]:
+        return {
+            "table_dumps": [dataclasses.asdict(td) for td in self.table_dumps],
+        }

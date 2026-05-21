@@ -271,5 +271,9 @@ def extract_via_union(
     if not resp:
         return ""
 
-    m = _re.search(_re.escape(_UNION_PREFIX) + r"(.*?)" + _re.escape(_UNION_SUFFIX), resp)
+    m = _re.search(
+        _re.escape(_UNION_PREFIX) + r"(.*?)" + _re.escape(_UNION_SUFFIX),
+        resp,
+        _re.DOTALL,
+    )
     return m.group(1) if m else ""

@@ -123,6 +123,7 @@ def interactive_prompts() -> argparse.Namespace:
         browser_crawl=False,
         exploit=exploit,
         dump=dump,
+        dump_all=False,
     )
 
 
@@ -217,5 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="After finding SQLi, extract version / current user / database / tables")
     p.add_argument("--dump", default="", metavar="TABLE",
                    help="Dump all rows from TABLE using a confirmed injection point (implies --exploit)")
+    p.add_argument("--dump-all", action="store_true", default=False, dest="dump_all",
+                   help="Dump every table discovered during extraction (implies --exploit)")
 
     return p

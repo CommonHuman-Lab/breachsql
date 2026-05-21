@@ -8,6 +8,7 @@ Top-level scan() entry point.
 from __future__ import annotations
 
 import json
+import os
 
 from .log import ScanResultHandler, get_logger
 from .http.injector import Injector
@@ -55,5 +56,14 @@ def scan(url: str, options: ScanOptions | None = None) -> ScanResult:
                 json.dump(result.to_dict(), fh, indent=2)
         except OSError as exc:
             result.append_error(f"Failed to write output file: {exc}")
+
+    if options.output and result.table_dumps:
+        base, ext = os.path.splitext(options.output)
+        dump_path = base + "_dump" + (ext or ".json")
+        try:
+            with open(dump_path, "w", encoding="utf-8") as fh:
+                json.dump(result.dumps_to_dict(), fh, indent=2)
+        except OSError as exc:
+            result.append_error(f"Failed to write dump file: {exc}")
 
     return result
