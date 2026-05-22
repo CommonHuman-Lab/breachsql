@@ -78,35 +78,35 @@ def scan_param(
     if baseline is None:
         return
 
-    _prev_error_count   = len(result.error_based)
-    _prev_boolean_count = len(result.boolean_based)
-    _prev_union_count   = len(result.union_based)
+    _surface_error_found   = False
+    _surface_boolean_found = False
+    _surface_union_found   = False
 
     for evasion in (evasions if evasions else [EVASION_NONE]):
-        if opts.use_error and len(result.error_based) == _prev_error_count:
+        if opts.use_error and not _surface_error_found:
+            _before = len(result.error_based)
             _test_error_based(url, method, params, param, evasion, opts, injector, result,
                               second_url, json_body, path_index)
+            _surface_error_found = len(result.error_based) > _before
 
         # Skip boolean if error or union already gave a definitive confirmation —
         # both are cheaper to detect and leave no ambiguity about injectability.
-        _definitive_hit = (
-            len(result.error_based) > _prev_error_count
-            or len(result.union_based) > _prev_union_count
-        )
-        if opts.use_boolean and not _definitive_hit and len(result.boolean_based) == _prev_boolean_count:
+        _definitive_hit = _surface_error_found or _surface_union_found
+        if opts.use_boolean and not _definitive_hit and not _surface_boolean_found:
+            _before = len(result.boolean_based)
             _test_boolean(url, method, params, param, baseline, evasion, opts, injector, result,
                           second_url, json_body, path_index)
+            _surface_boolean_found = len(result.boolean_based) > _before
 
-        if opts.use_union and len(result.union_based) == _prev_union_count:
+        if opts.use_union and not _surface_union_found:
+            _before = len(result.union_based)
             _test_union(url, method, params, param, evasion, opts, injector, result,
                         second_url, json_body, path_index)
+            _surface_union_found = len(result.union_based) > _before
 
         # Stop escalating evasions as soon as any technique confirms injection.
         # Once injectable under one evasion, further WAF-bypass attempts are wasted.
-        _error_done   = (not opts.use_error)  or len(result.error_based)   > _prev_error_count
-        _boolean_done = (not opts.use_boolean) or len(result.boolean_based) > _prev_boolean_count
-        _union_done   = (not opts.use_union)   or len(result.union_based)   > _prev_union_count
-        if _error_done or _boolean_done or _union_done:
+        if _surface_error_found or _surface_boolean_found or _surface_union_found:
             break
 
     # Level 3: run extended payload sets (db_contents + enum) via error channel
@@ -373,7 +373,7 @@ def _find_column_count(
     prefix_baseline: Dict[str, str] = {}
 
     def _get_prefix(payload: str) -> str:
-        m2 = _re.match(r"^(['\"]?\)*)", payload)
+        m2 = _re.match(r"^(\d+|['\"]?\)*)", payload)
         return m2.group(1) if m2 else ""
 
     def _response_looks_good(resp: str, prefix: str) -> bool:

