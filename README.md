@@ -13,6 +13,12 @@
 
 **Fast SQL injection scanner with built-in exploitation** — detect and extract in one command, across all major backends, with WAF evasion baked in. No Java. No license. Drops into a Python pipeline.
 
+<!-- markdownlint-disable MD033 -->
+<p align="center">
+  <img src="assets/breachsql_demo.gif" alt="BreachSQL demo" width="800"/>
+</p>
+<!-- markdownlint-enable MD033 -->
+
 ```bash
 # Kali / Debian / Ubuntu — use a virtual env (required on externally-managed Python)
 python3 -m venv .venv && source .venv/bin/activate
