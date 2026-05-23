@@ -287,11 +287,16 @@ def extract_via_union(
         if not resp:
             continue
 
-        # Search in tag-stripped text to avoid matching the marker inside an HTML
-        # attribute value (e.g. <input value="...BSQL_OUT_..._BSQL_END...">).
+        # Search tag-stripped text.  Skip matches where UNION+SELECT appear in the
+        # 200 chars before BSQL_OUT_ — that signals a reflected-payload echo (e.g.
+        # "Results for: ...UNION SELECT...'BSQL_OUT_'||expr||'_BSQL_END',...") rather
+        # than actual SQL output.
         text_content = _re.sub(r"<[^>]+>", "", resp)
-        m = _pat.search(text_content)
-        if m:
+        clean_lower = text_content.lower()
+        for m in _pat.finditer(text_content):
+            before = clean_lower[max(0, m.start() - 200):m.start()]
+            if "union" in before and "select" in before:
+                continue
             return m.group(1)
 
     return ""

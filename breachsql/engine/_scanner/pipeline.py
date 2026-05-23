@@ -410,9 +410,15 @@ def _run_exploit(
     dbms = (result.dbms_detected or opts.dbms or "auto").lower()
     targets = get_extraction_targets(dbms)
 
-    # Prefer UNION extraction (one request per target, no binary search)
+    # Prefer UNION extraction (one request per target, no binary search).
+    # Sort: findings with actual marker reflection first (they have a known
+    # reflectable column); HTTP-500-only findings are last (no direct output).
     if result.union_based:
-        union_finding = result.union_based[0]
+        _ranked = sorted(
+            result.union_based,
+            key=lambda f: 1 if "[HTTP 500" in (f.extracted or "") else 0,
+        )
+        union_finding = _ranked[0]
         surface = next(
             (s for s in surfaces
              if s["url"] == union_finding.url

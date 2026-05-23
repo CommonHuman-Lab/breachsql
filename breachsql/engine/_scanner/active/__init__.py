@@ -126,7 +126,10 @@ def scan_param(
                           second_url=second_url, json_body=json_body, path_index=path_index)
             if resp is None:
                 continue
-            dbms_hit, evidence = _detect_db_error(resp)
+            _resp_l3 = resp
+            for _v in (payload, payload.upper(), payload.lower()):
+                _resp_l3 = _resp_l3.replace(_v, "")
+            dbms_hit, evidence = _detect_db_error(_resp_l3)
             if dbms_hit:
                 result.append_error_based(ErrorBasedFinding(
                     url=url, parameter=param, method=method,
@@ -170,7 +173,13 @@ def _test_error_based(
         if resp is None:
             continue
 
-        dbms, evidence = _detect_db_error(resp)
+        # Strip the injected payload from the response before checking for DB
+        # errors.  Apps that reflect the payload in their own error message
+        # (e.g. "Invalid symbol: ' AND EXTRACTVALUE(...)")
+        _resp_clean = resp
+        for _v in (payload, payload.upper(), payload.lower()):
+            _resp_clean = _resp_clean.replace(_v, "")
+        dbms, evidence = _detect_db_error(_resp_clean)
         if dbms:
             logger.finding(
                 "Error-based SQLi: %s param=%s payload=%s dbms=%s",
@@ -298,7 +307,10 @@ def _test_union(
 
     # Step 2: find a reflected column
     marker = make_marker()
-    probes = union_null_probes(col_count, marker)
+    _lite = (evasion == EVASION_NONE or evasion == "none")
+    probes = union_null_probes(col_count, marker, lite=_lite)
+
+    _first_http500_payload: Optional[str] = None  # best candidate for HTTP-500 signal
 
     for raw_payload in probes:
         payload = apply_evasion(raw_payload, evasion)
@@ -307,7 +319,13 @@ def _test_union(
         if resp is None:
             continue
 
-        if marker in resp:
+        # Case-insensitive check: servers may uppercase the injected value (e.g. .upper() calls)
+        _resp_lower   = resp.lower()
+        _marker_lower = marker.lower()
+        if _marker_lower in _resp_lower:
+            # Resolve the actual case form as it appears in the response
+            _idx = _resp_lower.index(_marker_lower)
+            found_marker = resp[_idx : _idx + len(marker)]
             # Guard 1: DB error reflection
             err_dbms, _ = _detect_db_error(resp)
             if err_dbms:
@@ -318,14 +336,14 @@ def _test_union(
                 )
                 continue
             # Guard 2: URL/path reflection
-            if _is_path_reflected(resp, marker, payload):
+            if _is_path_reflected(resp, found_marker, payload):
                 logger.debug(
                     "Union probe: marker found but appears to be URL/path reflection, "
                     "skipping param=%s payload=%s",
                     param, payload,
                 )
                 continue
-            _disp = re.sub(r"BreachSQL_[A-Za-z0-9]+", "<marker>", payload)
+            _disp = re.sub(r"BreachSQL_[A-Za-z0-9]+", "<marker>", payload, flags=re.IGNORECASE)
             _disp = re.sub(r"\bchar\(\d[\d,]+\)", "char(<marker>)", _disp)
             logger.finding(
                 "Union SQLi: %s param=%s cols=%d payload=%s",
@@ -337,9 +355,31 @@ def _test_union(
                 method=method,
                 payload=payload,
                 column_count=col_count,
-                extracted=_extract_marker(resp, marker),
+                extracted=_extract_marker(resp, found_marker),
             ))
             return
+
+        # HTTP 500 from a UNION probe means the injection was executed but a
+        # downstream template or type-cast crashed on the injected value.
+        # Track the first such probe; report it only if no direct reflection is found.
+        if "__HTTP_STATUS_500__" in resp and _first_http500_payload is None:
+            _first_http500_payload = payload
+
+    # No direct marker reflection found — fall back to HTTP-500 confirmation
+    if _first_http500_payload is not None:
+        _disp = re.sub(r"BreachSQL_[A-Za-z0-9]+", "<marker>", _first_http500_payload, flags=re.IGNORECASE)
+        logger.finding(
+            "Union SQLi (HTTP 500 — template crash): %s param=%s cols=%d payload=%s",
+            url, param, col_count, _disp,
+        )
+        result.append_union(UnionFinding(
+            url=url,
+            parameter=param,
+            method=method,
+            payload=_first_http500_payload,
+            column_count=col_count,
+            extracted="[HTTP 500 — template crash on injected value]",
+        ))
 
 
 def _find_column_count(
@@ -358,7 +398,8 @@ def _find_column_count(
     when ORDER BY N exceeds the column count, so we detect both cases.
     """
     import re as _re
-    probes = order_by_probes(max_cols=max_cols)
+    _lite = (evasion == EVASION_NONE or evasion == "none")
+    probes = order_by_probes(max_cols=max_cols, lite=_lite)
     last_ok: Optional[int] = None
 
     # Fetch a 'known-good' baseline to detect content disappearance
@@ -436,6 +477,34 @@ def _find_column_count(
         )
         if best is not None:
             return best
+
+    # Fallback: ORDER BY detection failed because the app swallows DB errors
+    # (try/except around the query).  Use UNION probes instead: when the column
+    # count is correct the SQL is valid and the row is returned.
+    if (last_ok is None or last_ok == max_cols) and baseline_resp is not None:
+        _fb_marker = "BSCNT_PROBE"  # short, all-caps survives .upper() on the server
+        # Two injection styles cover the common quoting contexts; exit on first hit.
+        _fb_fmts = (
+            f"' UNION SELECT {{}}-- -",
+            f" UNION SELECT {{}}-- -",
+            f"0 UNION SELECT {{}}-- -",
+        )
+        for _n in range(1, max_cols + 1):
+            _inner = ",".join([f"'{_fb_marker}'"] * _n)
+            for _fmt in _fb_fmts:
+                _pl   = apply_evasion(_fmt.format(_inner), evasion)
+                _resp = _fetch(injector, url, method, params, param, _pl,
+                               second_url=second_url, json_body=json_body,
+                               path_index=path_index)
+                if _resp is None:
+                    continue
+                # Direct reflection: marker appears in rendered text
+                if _fb_marker.lower() in _resp.lower():
+                    return _n
+                # Template crash: UNION was syntactically valid but a float-format
+                # Jinja filter blew up on a NULL/string value — still a hit.
+                if "__HTTP_STATUS_500__" in _resp:
+                    return _n
 
     return last_ok
 

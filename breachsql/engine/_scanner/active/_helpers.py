@@ -246,6 +246,8 @@ def _is_path_reflected(body: str, marker: str, payload: str) -> bool:
     1. The marker is inside a ``<title>`` tag.
     2. The marker immediately follows URL-encoded SQL characters — indicating
        the full payload was echoed verbatim.
+    3. The marker only appears in an HTML attribute context (e.g. form input value).
+    4. In the tag-stripped body, the marker is preceded by "UNION" and "SELECT" within 120 chars.
     """
     import urllib.parse as _up
     body_lower = body.lower()
@@ -265,8 +267,6 @@ def _is_path_reflected(body: str, marker: str, payload: str) -> bool:
 
     # Heuristic 3: marker only appears in HTML attribute context (form input value echo).
     # e.g. <input value="... &#39;BreachSQL_abc&#39; ...">
-    # Only flag as reflected if the marker does NOT appear outside of HTML tags —
-    # i.e., no occurrence in rendered text content.
     import re as _re2
     clean_text = _re2.sub(r"<[^>]+>", "", body)
     if marker.lower() not in clean_text.lower():
@@ -274,5 +274,28 @@ def _is_path_reflected(body: str, marker: str, payload: str) -> bool:
             if (f"{enc_quote}{marker}".lower() in body.lower()
                     or f"{marker}{enc_quote}".lower() in body.lower()):
                 return True
+
+    # Heuristic 4: check the tag-stripped (rendered text) body.  If EVERY occurrence
+    # of the marker in rendered text has "union" and "select" within 120 chars before
+    # it, the marker is only present as a reflected payload (e.g. "Results for: ...
+    # UNION SELECT 'marker'...") and not as actual SQL output.
+    # If at least ONE occurrence has no SQL keywords before it, the marker appeared
+    # as genuine data output — do NOT flag as reflected.
+    clean_body_lower = clean_text.lower()
+    marker_lower = marker.lower()
+    start = 0
+    reflected_count = 0
+    total_count = 0
+    while True:
+        clean_idx = clean_body_lower.find(marker_lower, start)
+        if clean_idx == -1:
+            break
+        total_count += 1
+        clean_before = clean_body_lower[max(0, clean_idx - 120):clean_idx]
+        if "union" in clean_before and "select" in clean_before:
+            reflected_count += 1
+        start = clean_idx + 1
+    if total_count > 0 and reflected_count == total_count:
+        return True
 
     return False
