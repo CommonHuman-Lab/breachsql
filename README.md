@@ -24,11 +24,9 @@
 python3 -m venv .venv && source .venv/bin/activate
 pip install breachsql
 
-# Scan, exploit, and dump everything — outputs written to target.com/
-breachsql -u "https://target.com/item?id=1" --exploit
+# Scan, exploit, and dump everything — outputs written to 127.0.0.1/
+breachsql -u "http://127.0.0.1:17476/challenges/my1/secrets?id=1" --exploit
 
-# Dump a specific table straight from the finding
-breachsql -u "https://target.com/item?id=1" --dump users
 ```
 
 > Point it at a target. Get findings. Drop it in a pipeline.
@@ -74,11 +72,8 @@ breachsql -u "https://target.com/users?id=1" --dbms mysql --technique E
 # Exploit: dump every table, write target.com/{txt,json,html} automatically
 breachsql -u "https://target.com/users?id=1" --exploit
 
-# Dump all rows from a specific table (implies --exploit)
-breachsql -u "https://target.com/users?id=1" --dump users
-
-# Dump every table, save results to a custom output stem
-breachsql -u "https://target.com/users?id=1" --dump-all -o results/target
+# Exploit: dump every table, write target.com/{txt,json,html} automatically, save results to a custom output stem
+breachsql -u "https://target.com/users?id=1" --exploit -o results/target
 
 # Full multi-technique scan
 breachsql -u "https://target.com/report?id=1" --dbms mysql --technique EBTUS --level 2 --risk 2
@@ -107,7 +102,7 @@ breachsql -u "https://target.com/" --browser-crawl --level 2
 | `U` | UNION-based | Column-count probing + data extraction via UNION SELECT |
 | `S` | Stacked | Semicolon-delimited second statement injection |
 
-Combine with `-t EBTUS` to run all techniques in a single pass.
+Combine with `--technique EBTUS` to run all techniques in a single pass.
 
 ---
 
@@ -135,7 +130,7 @@ for f in result.error_based:
 | `-u` | — | Target to use |
 | `--crawl` | — | Crawl target |
 | `--dbms` | auto | Target backend: `mysql`, `mariadb`, `postgres`, `sqlite`, `mssql`, `oracle` |
-| `-t` / `--technique` | `EBTUS` | Techniques to run (any combo of E B T U S) |
+| `--technique` | `EBTUS` | Techniques to run (any combo of E B T U S) |
 | `--level` | `1` | Payload depth: 1 = standard, 2 = extended, 3 = extended + data extraction |
 | `--risk` | `1` | Payload aggression: 1 = low, 2 = medium, 3 = high |
 | `--time-threshold` | `5` | Seconds to consider a time-blind hit (T technique) |
@@ -151,9 +146,7 @@ for f in result.error_based:
 | `--login-pass` | — | Password for form login |
 | `--openapi` | — | OpenAPI/Swagger spec file or URL — imports endpoints to scan |
 | `--browser-crawl` | — | Headless Chromium endpoint discovery (requires selenium) |
-| `--exploit` | — | Dump every discovered table; auto-creates `<host>/` and writes `<host>.txt`, `<host>.json`, `<host>.html` |
-| `--dump TABLE` | — | Dump all rows from TABLE using a confirmed injection point (implies `--exploit`) |
-| `--dump-all` | — | Dump every discovered table (implies `--exploit`); use with `-o` to control output path |
+| `--exploit` | — | Exploits and dump every discovered table; auto-creates `<host>/` and writes `<host>.txt`, `<host>.json`, `<host>.html` |
 | `-o` | — | Output stem — writes `<name>.txt`, `<name>.json`, `<name>_dump.json` |
 | `--report-html` | — | Write a self-contained HTML report to this file |
 
@@ -161,7 +154,7 @@ for f in result.error_based:
 
 ## Fire Range
 
-The **BreachSQL Fire Range** is a deliberately vulnerable Flask + MySQL + PostgreSQL + SQLite app that ships with [OctoRig](https://github.com/CommonHuman-Lab/OctoRig). It provides injectable endpoints that the scanner is verified against on every change.
+The **BreachSQL Fire Range** is a deliberately vulnerable Flask + MySQL + PostgreSQL + SQLite app that ships with [OctoRig](https://github.com/CommonHuman-Lab/OctoRig).
 
 ```bash
 # Start the Fire Range (OctoRig required)
