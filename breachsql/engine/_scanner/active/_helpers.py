@@ -269,9 +269,10 @@ def _is_path_reflected(body: str, marker: str, payload: str) -> bool:
     # i.e., no occurrence in rendered text content.
     import re as _re2
     clean_text = _re2.sub(r"<[^>]+>", "", body)
-    if marker not in clean_text:
+    if marker.lower() not in clean_text.lower():
         for enc_quote in ("&#39;", "&apos;", "%27"):
-            if f"{enc_quote}{marker}" in body or f"{marker}{enc_quote}" in body:
+            if (f"{enc_quote}{marker}".lower() in body.lower()
+                    or f"{marker}{enc_quote}".lower() in body.lower()):
                 return True
 
     return False
