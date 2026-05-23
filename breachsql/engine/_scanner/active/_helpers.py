@@ -263,4 +263,15 @@ def _is_path_reflected(body: str, marker: str, payload: str) -> bool:
     if encoded_marker != marker and encoded_marker in body:
         return True
 
+    # Heuristic 3: marker only appears in HTML attribute context (form input value echo).
+    # e.g. <input value="... &#39;BreachSQL_abc&#39; ...">
+    # Only flag as reflected if the marker does NOT appear outside of HTML tags —
+    # i.e., no occurrence in rendered text content.
+    import re as _re2
+    clean_text = _re2.sub(r"<[^>]+>", "", body)
+    if marker not in clean_text:
+        for enc_quote in ("&#39;", "&apos;", "%27"):
+            if f"{enc_quote}{marker}" in body or f"{marker}{enc_quote}" in body:
+                return True
+
     return False

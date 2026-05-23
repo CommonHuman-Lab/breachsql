@@ -350,6 +350,20 @@ def _dump_table_union(
         opts=opts,
         injector=injector,
     )
+    # When DBMS is auto and the primary expression fails, try SQLite pragma_table_info.
+    # If it succeeds, treat as SQLite for the rest of the dump so row expressions match.
+    if not cols_raw and dbms == "auto":
+        col_expr = f"(SELECT GROUP_CONCAT(name,',') FROM pragma_table_info('{table}'))"
+        cols_raw = extract_via_union(
+            expr=col_expr,
+            union_finding=union_finding,
+            surface=surface,
+            evasions=evasions,
+            opts=opts,
+            injector=injector,
+        )
+        if cols_raw:
+            dbms = "sqlite"
     if not cols_raw:
         logger.warning("dump: could not retrieve columns for table %s", table)
         return

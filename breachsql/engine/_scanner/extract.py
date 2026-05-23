@@ -287,7 +287,10 @@ def extract_via_union(
         if not resp:
             continue
 
-        m = _pat.search(resp)
+        # Search in tag-stripped text to avoid matching the marker inside an HTML
+        # attribute value (e.g. <input value="...BSQL_OUT_..._BSQL_END...">).
+        text_content = _re.sub(r"<[^>]+>", "", resp)
+        m = _pat.search(text_content)
         if m:
             return m.group(1)
 
