@@ -72,7 +72,7 @@ breachsql -u "https://target.com/users?id=1" --dbms mysql --technique E
 # Exploit: dump every table, write target.com/{txt,json,html} automatically
 breachsql -u "https://target.com/users?id=1" --exploit
 
-# Exploit: dump every table, write target.com/{txt,json,html} automatically, save results to a custom output stem
+# Exploits, and save results to a custom output stem
 breachsql -u "https://target.com/users?id=1" --exploit -o results/target
 
 # Full multi-technique scan
