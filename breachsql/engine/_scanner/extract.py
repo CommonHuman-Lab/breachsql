@@ -164,6 +164,13 @@ async def _binary_search_char(
 _UNION_PREFIX = "BSQL_OUT_"
 _UNION_SUFFIX = "_BSQL_END"
 _MARKER_RE    = _re.compile(r"'BreachSQL_[^']*'")
+# Detects SQL operators/functions that would appear when the injection payload
+# is echoed verbatim (e.g. via Jinja2 |safe or unescaped output), rather than
+# being rendered as an evaluated database value.
+_SQL_REFLECTION_RE = _re.compile(
+    r"'\|\||\|\|'|\bCAST\s*\(|\bGROUP_CONCAT\b|\bCONCAT\s*\(|\bpragma_table_info\b",
+    _re.IGNORECASE,
+)
 
 
 async def extract_via_union(
@@ -225,9 +232,18 @@ async def extract_via_union(
         text_content = _re.sub(r"<[^>]+>", "", resp)
         clean_lower = text_content.lower()
         for m in _pat.finditer(text_content):
-            before = clean_lower[max(0, m.start() - 200):m.start()]
-            if "union" in before and "select" in before:
+            captured = m.group(1)
+            # If the captured text contains SQL operators or function calls it's
+            # the raw injection expression echoed by the template (e.g. via
+            # |safe), not an evaluated database value.  Skip it.
+            if _SQL_REFLECTION_RE.search(captured):
                 continue
-            return m.group(1)
+            # Legacy check: skip if clearly within the reflected UNION SELECT
+            # block, but only when no SQL-syntax match was caught above AND
+            # "union" appears in the narrow (50-char) window right before.
+            before50 = clean_lower[max(0, m.start() - 50):m.start()]
+            if "union" in before50 and "select" in before50:
+                continue
+            return captured
 
     return ""

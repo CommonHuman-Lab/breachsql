@@ -27,6 +27,13 @@ from commonhuman_payloads.sqli import get_extraction_targets
 _COL_SEP = "|"
 _ROW_SEP = "||~~||"
 
+# Matches path segments that look like dynamic identifiers: pure integers,
+# short ALL-CAPS symbols (stock tickers, IDs), or UUIDs.
+_DYN_SEG_RE = re.compile(
+    r"^(\d+|[A-Z][A-Z0-9]{1,7}"
+    r"|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+)
+
 logger = get_logger("breachsql.pipeline")
 
 
@@ -179,11 +186,23 @@ async def run(url: str, opts: ScanOptions, injector: AsyncInjector, result: Scan
                             })
                         break
 
-    # Deduplicate
+    # Deduplicate — for GET surfaces, normalise to path+netloc so the same
+    # parameter at /browse?genre=Action and /browse?genre=Comedy is only
+    # tested once (the crawl visits many URL variants of the same endpoint).
+    # Also deduplicate POST forms on path-parameterized pages like /market/ACME
+    # and /market/BLKR by normalising dynamic path segments to {dyn}.
+    def _norm_url_for_key(s: dict) -> str:
+        _p = _up.urlparse(s["url"])
+        _norm_path = "/".join(
+            "{dyn}" if _DYN_SEG_RE.match(seg) else seg
+            for seg in _p.path.split("/")
+        )
+        return _up.urlunparse((_p.scheme, _p.netloc, _norm_path, "", "", ""))
+
     _seen_surfaces: set = set()
     _deduped: list = []
     for _s in surfaces:
-        _key = (_s["url"], _s["method"], _s["single_param"])
+        _key = (_norm_url_for_key(_s), _s["method"], _s["single_param"])
         if _key not in _seen_surfaces:
             _seen_surfaces.add(_key)
             _deduped.append(_s)
@@ -321,7 +340,8 @@ async def _dump_table_union(
     injector: AsyncInjector,
     result: ScanResult,
 ) -> None:
-    dbms = (result.dbms_detected or opts.dbms or "auto").lower()
+    _explicit = (opts.dbms or "").lower()
+    dbms = _explicit if (_explicit and _explicit != "auto") else (result.dbms_detected or "auto").lower()
 
     col_expr = _columns_expr(table, dbms)
     cols_raw = await extract_via_union(
@@ -344,6 +364,8 @@ async def _dump_table_union(
         )
         if cols_raw:
             dbms = "sqlite"
+            if result.dbms_detected is None:
+                result.dbms_detected = "sqlite"
     if not cols_raw:
         logger.warning("dump: could not retrieve columns for table %s", table)
         return
@@ -384,7 +406,11 @@ async def _run_exploit(
     result: ScanResult,
     surfaces: List[Dict[str, Any]],
 ) -> None:
-    dbms = (result.dbms_detected or opts.dbms or "auto").lower()
+    _explicit_dbms = (opts.dbms or "").lower()
+    if _explicit_dbms and _explicit_dbms != "auto":
+        dbms = _explicit_dbms
+    else:
+        dbms = (result.dbms_detected or "auto").lower()
     targets = get_extraction_targets(dbms)
 
     if result.union_based:
@@ -407,6 +433,11 @@ async def _run_exploit(
             logger.info("Extracting %d target(s) via UNION on %s [%s]",
                         len(targets), union_finding.parameter, union_finding.url)
             for label, expr in targets:
+                # Once we know the DBMS, skip targets that are irrelevant to it.
+                # e.g. skip VERSION() after sqlite_version() confirmed SQLite.
+                if dbms == "sqlite" and label in ("version", "current_user") and expr in ("VERSION()", "CURRENT_USER"):
+                    logger.debug("extract: skipping %s (not applicable to sqlite)", label)
+                    continue
                 try:
                     value = await extract_via_union(
                         expr=expr,
@@ -426,6 +457,11 @@ async def _run_exploit(
                             value=value,
                             mode="union",
                         ))
+                        # Infer SQLite from sqlite_version() succeeding so
+                        # subsequent targets and table dumps skip MySQL/Postgres paths.
+                        if label == "sqlite_version" and result.dbms_detected is None:
+                            result.dbms_detected = "sqlite"
+                            dbms = "sqlite"
                     else:
                         logger.debug("extract: no value returned for %s", label)
                 except Exception as exc:
