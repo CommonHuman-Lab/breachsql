@@ -2,7 +2,7 @@
 # Copyright (c) 2026 CommonHuman-Lab
 """
 BreachSQL — engine/_scanner/blind.py
-Time-based blind and out-of-band (OOB) SQLi detection.
+Time-based blind and out-of-band (OOB) SQLi detection (async).
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from ..log import get_logger
 from ..reporter import TimeFinding, OOBFinding, ExtractionFinding, ScanResult
-from ..http.injector import Injector
+from ..http.injector import AsyncInjector
 from ..http.waf_detect import EVASION_NONE
 from .options import ScanOptions
 from .payloads import apply_evasion, get_time_payloads, get_oob_payloads
@@ -22,14 +22,14 @@ logger = get_logger("breachsql.blind")
 _MAX_TIME_PAYLOADS = 12
 
 
-def run_time_based(
+async def run_time_based(
     surface: Dict[str, Any],
     evasions: List[str],
     opts: ScanOptions,
-    injector: Injector,
+    injector: AsyncInjector,
     result: ScanResult,
 ) -> None:
-    """Test a single surface for time-based blind SQLi."""
+    """Test a single surface for time-based blind SQLi (sequential — timing sensitive)."""
     url       = surface["url"]
     method    = surface["method"]
     params    = surface["params"]
@@ -43,8 +43,7 @@ def run_time_based(
 
     payloads = get_time_payloads(dbms, opts.time_threshold)[:_MAX_TIME_PAYLOADS]
 
-    # Measure baseline response time (2 samples, take min)
-    baseline_time = _measure_baseline(injector, url, method, params, param, second_url, json_body, path_index)
+    baseline_time = await _measure_baseline(injector, url, method, params, param, second_url, json_body, path_index)
     if baseline_time is None:
         return
 
@@ -53,16 +52,14 @@ def run_time_based(
     for evasion in (evasions if evasions else [EVASION_NONE]):
         for raw_payload in payloads:
             payload = apply_evasion(raw_payload, evasion)
-            elapsed = _timed_fetch(injector, url, method, params, param, payload,
-                                   second_url=second_url, json_body=json_body, path_index=path_index)
+            elapsed = await _async_timed_fetch(injector, url, method, params, param, payload,
+                                               second_url=second_url, json_body=json_body, path_index=path_index)
             if elapsed is None:
                 continue
 
-            # Hit if we exceed threshold AND the delay is at least 2× baseline
             if elapsed >= opts.time_threshold and elapsed >= baseline_time * 2:
-                # Confirm with a second request
-                elapsed2 = _timed_fetch(injector, url, method, params, param, payload,
-                                        second_url=second_url, json_body=json_body, path_index=path_index)
+                elapsed2 = await _async_timed_fetch(injector, url, method, params, param, payload,
+                                                    second_url=second_url, json_body=json_body, path_index=path_index)
                 if elapsed2 is not None and elapsed2 >= opts.time_threshold:
                     _dbms = _infer_dbms_from_payload(raw_payload)
                     logger.finding(
@@ -80,7 +77,6 @@ def run_time_based(
                     ))
                     if result.dbms_detected is None and _dbms != "unknown":
                         result.dbms_detected = _dbms
-                    # Level 3: attempt data extraction via time-blind char extractor
                     if opts.level >= 3:
                         from .extract import extract_value, get_extraction_targets
                         _baseline_resp = ""
@@ -88,7 +84,7 @@ def run_time_based(
                                     "single_param": param,
                                     "json_body": json_body, "path_index": path_index}
                         for _label, _expr in get_extraction_targets(_dbms):
-                            _extracted = extract_value(
+                            _extracted = await extract_value(
                                 expr=_expr,
                                 surface=_surface,
                                 evasions=[evasion],
@@ -104,21 +100,20 @@ def run_time_based(
                                     url=url, parameter=param, method=method,
                                     expr=_expr, value=_extracted, mode="time",
                                 ))
-                    return  # one finding per param is enough
+                    return
 
-        # If a finding was recorded with this evasion, stop escalating
         if len(result.time_based) > _prev_count:
             break
 
 
-def run_oob(
+async def run_oob(
     surface: Dict[str, Any],
     evasions: List[str],
     opts: ScanOptions,
-    injector: Injector,
+    injector: AsyncInjector,
     result: ScanResult,
 ) -> None:
-    """Inject OOB payloads. Confirmation requires checking your callback server externally."""
+    """Inject OOB payloads (async). Confirmation requires checking your callback server externally."""
     if not opts.oob_callback:
         return
 
@@ -141,15 +136,15 @@ def run_oob(
             try:
                 if method.upper() == "POST":
                     if json_body:
-                        injector.post(url, json_body={**params, param: payload})
+                        await injector.post(url, json_body={**params, param: payload})
                     else:
-                        injector.post(url, data={**params, param: payload})
+                        await injector.post(url, data={**params, param: payload})
                 elif method.upper() == "PATH":
-                    injector.inject_path(url, path_index, payload)
+                    await injector.inject_path(url, path_index, payload)
                 elif method.upper() == "COOKIE":
-                    injector.inject_cookie(url, param, payload)
+                    await injector.inject_cookie(url, param, payload)
                 else:
-                    injector.inject_get(url, param, payload)
+                    await injector.inject_get(url, param, payload)
             except Exception as exc:
                 logger.debug("OOB inject error %s param=%s: %s", url, param, exc)
                 continue
@@ -163,7 +158,7 @@ def run_oob(
                 callback_url=opts.oob_callback,
                 confirmed=False,
             ))
-            return  # one OOB injection per param
+            return
 
         _cur_count = len(result.oob)
         if _cur_count > _prev_count:
@@ -174,8 +169,8 @@ def run_oob(
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _timed_fetch(
-    injector: Injector,
+async def _async_timed_fetch(
+    injector: AsyncInjector,
     url: str,
     method: str,
     params: Dict[str, str],
@@ -185,10 +180,9 @@ def _timed_fetch(
     json_body: bool = False,
     path_index: int = 0,
 ) -> Optional[float]:
-    """Send request with *value* appended to the original param and return elapsed seconds."""
+    """Send request with *value* appended to the original param; return elapsed seconds."""
     import urllib.parse as _up
 
-    # Append payload to original param value (same logic as active._fetch)
     if method.upper() == "GET":
         qs = _up.parse_qs(_up.urlparse(url).query, keep_blank_values=True)
         original = qs.get(param, [""])[0]
@@ -202,38 +196,38 @@ def _timed_fetch(
         if second_url:
             if method.upper() == "POST":
                 if json_body:
-                    injector.post(url, json_body=injected)
+                    await injector.post(url, json_body=injected)
                 else:
-                    injector.post(url, data=injected)
+                    await injector.post(url, data=injected)
             elif method.upper() == "PATH":
-                injector.inject_path(url, path_index, injected_value)
+                await injector.inject_path(url, path_index, injected_value)
             elif method.upper() == "COOKIE":
-                injector.inject_cookie(url, param, injected_value)
+                await injector.inject_cookie(url, param, injected_value)
             elif method.upper() == "HEADER":
-                injector.inject_header(url, param, injected_value)
+                await injector.inject_header(url, param, injected_value)
             else:
-                injector.inject_get(url, param, injected_value)
-            injector.get(second_url)
+                await injector.inject_get(url, param, injected_value)
+            await injector.get(second_url)
         elif method.upper() == "POST":
             if json_body:
-                injector.post(url, json_body=injected)
+                await injector.post(url, json_body=injected)
             else:
-                injector.post(url, data=injected)
+                await injector.post(url, data=injected)
         elif method.upper() == "PATH":
-            injector.inject_path(url, path_index, injected_value)
+            await injector.inject_path(url, path_index, injected_value)
         elif method.upper() == "COOKIE":
-            injector.inject_cookie(url, param, injected_value)
+            await injector.inject_cookie(url, param, injected_value)
         elif method.upper() == "HEADER":
-            injector.inject_header(url, param, injected_value)
+            await injector.inject_header(url, param, injected_value)
         else:
-            injector.inject_get(url, param, injected_value)
+            await injector.inject_get(url, param, injected_value)
         return time.monotonic() - t0
     except Exception:
         return None
 
 
-def _measure_baseline(
-    injector: Injector,
+async def _measure_baseline(
+    injector: AsyncInjector,
     url: str,
     method: str,
     params: Dict[str, str],
@@ -242,18 +236,18 @@ def _measure_baseline(
     json_body: bool = False,
     path_index: int = 0,
 ) -> Optional[float]:
-    """Return the minimum of two clean request times (original param value, no injection)."""
+    """Return the minimum of two clean request times."""
     times = []
     for _ in range(2):
-        t = _timed_fetch_clean(injector, url, method, params, param,
-                               second_url=second_url, json_body=json_body, path_index=path_index)
+        t = await _async_timed_fetch_clean(injector, url, method, params, param,
+                                           second_url=second_url, json_body=json_body, path_index=path_index)
         if t is not None:
             times.append(t)
     return min(times) if times else None
 
 
-def _timed_fetch_clean(
-    injector: Injector,
+async def _async_timed_fetch_clean(
+    injector: AsyncInjector,
     url: str,
     method: str,
     params: Dict[str, str],
@@ -262,7 +256,7 @@ def _timed_fetch_clean(
     json_body: bool = False,
     path_index: int = 0,
 ) -> Optional[float]:
-    """Send the request with the *original* param value (no injection) and return elapsed seconds."""
+    """Send the request with the original param value (no injection) and return elapsed seconds."""
     import urllib.parse as _up
 
     if method.upper() == "GET":
@@ -276,34 +270,38 @@ def _timed_fetch_clean(
         if second_url:
             if method.upper() == "POST":
                 if json_body:
-                    injector.post(url, json_body=params)
+                    await injector.post(url, json_body=params)
                 else:
-                    injector.post(url, data=params)
+                    await injector.post(url, data=params)
             elif method.upper() == "PATH":
-                injector.inject_path(url, path_index, original)
+                await injector.inject_path(url, path_index, original)
             elif method.upper() == "COOKIE":
-                injector.inject_cookie(url, param, original)
+                await injector.inject_cookie(url, param, original)
             elif method.upper() == "HEADER":
-                injector.inject_header(url, param, original)
+                await injector.inject_header(url, param, original)
             else:
-                injector.inject_get(url, param, original)
-            injector.get(second_url)
+                await injector.inject_get(url, param, original)
+            await injector.get(second_url)
         elif method.upper() == "POST":
             if json_body:
-                injector.post(url, json_body=params)
+                await injector.post(url, json_body=params)
             else:
-                injector.post(url, data=params)
+                await injector.post(url, data=params)
         elif method.upper() == "PATH":
-            injector.inject_path(url, path_index, original)
+            await injector.inject_path(url, path_index, original)
         elif method.upper() == "COOKIE":
-            injector.inject_cookie(url, param, original)
+            await injector.inject_cookie(url, param, original)
         elif method.upper() == "HEADER":
-            injector.inject_header(url, param, original)
+            await injector.inject_header(url, param, original)
         else:
-            injector.inject_get(url, param, original)
+            await injector.inject_get(url, param, original)
         return time.monotonic() - t0
     except Exception:
         return None
+
+
+# Keep the old name as an alias so stacked.py and extract.py can import it unchanged
+_timed_fetch = _async_timed_fetch
 
 
 def _infer_dbms_from_payload(payload: str) -> str:

@@ -7,11 +7,12 @@ Top-level scan() entry point.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 
 from .log import ScanResultHandler, get_logger
-from .http.injector import Injector
+from .http.injector import AsyncInjector
 from .reporter import ScanResult
 from .http import waf_detect  # noqa: F401 (patch target for tests)
 from ._scanner.options import ScanOptions  # noqa: F401 (re-exported)
@@ -24,13 +25,11 @@ _OUTPUT_EXTS = {".json", ".txt", ".html"}
 
 
 def _output_stem(path: str) -> str:
-    """Strip extension only if it's one of our known output types (not e.g. '.1' in an IP)."""
     root, ext = os.path.splitext(path)
     return root if ext.lower() in _OUTPUT_EXTS else path
 
 
 def _unique_stem(stem: str) -> str:
-    """Return *stem* unchanged if no collision exists, else append _1, _2, …"""
     suffixes = (".json", ".txt", "_dump.json", ".html")
     if not any(os.path.exists(stem + s) for s in suffixes):
         return stem
@@ -51,7 +50,7 @@ def scan(url: str, options: ScanOptions | None = None) -> ScanResult:
     _handler.setFormatter(__import__("logging").Formatter("%(name)s: %(message)s"))
     _root.addHandler(_handler)
 
-    injector = Injector(
+    injector = AsyncInjector(
         timeout=options.timeout,
         proxy=options.proxy or None,
         headers=options.headers or None,
@@ -59,14 +58,19 @@ def scan(url: str, options: ScanOptions | None = None) -> ScanResult:
         delay=options.delay,
     )
 
+    async def _run_and_close() -> None:
+        try:
+            await run(url, options, injector, result)
+        except Exception as exc:
+            result.append_error(f"Scan aborted: {exc}")
+            logger.exception("BreachSQL scan error")
+        finally:
+            await injector.aclose()
+
     try:
-        run(url, options, injector, result)
-    except Exception as exc:
-        result.append_error(f"Scan aborted: {exc}")
-        logger.exception("BreachSQL scan error")
+        asyncio.run(_run_and_close())
     finally:
         _root.removeHandler(_handler)
-        injector.close()
         result.requests_sent = injector.request_count
         result.finish()
 

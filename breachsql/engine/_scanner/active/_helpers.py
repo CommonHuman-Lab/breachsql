@@ -10,7 +10,7 @@ import re
 from typing import Any, Dict, Optional
 
 from ...log import get_logger
-from ...http.injector import Injector
+from ...http.injector import Injector, AsyncInjector
 
 logger = get_logger("breachsql.active")
 
@@ -299,3 +299,72 @@ def _is_path_reflected(body: str, marker: str, payload: str) -> bool:
         return True
 
     return False
+
+
+async def _async_fetch(
+    injector: AsyncInjector,
+    url: str,
+    method: str,
+    params: dict,
+    param: str,
+    value,
+    second_url: str = "",
+    json_body: bool = False,
+    path_index: int = 0,
+):
+    """Async counterpart to _fetch — same logic, awaited HTTP calls."""
+    import urllib.parse as _up
+
+    if method.upper() == "GET":
+        qs = _up.parse_qs(_up.urlparse(url).query, keep_blank_values=True)
+        original = qs.get(param, [""])[0]
+    else:
+        original = params.get(param, "")
+
+    injected_value = original if value is None else original + value
+    injected = {**params, param: injected_value}
+
+    try:
+        if second_url:
+            if method.upper() == "POST":
+                if json_body:
+                    await injector.post(url, json_body=injected)
+                else:
+                    await injector.post(url, data=injected)
+            elif method.upper() == "PATH":
+                await injector.inject_path(url, path_index, injected[param])
+            elif method.upper() == "COOKIE":
+                await injector.inject_cookie(url, param, injected[param])
+            elif method.upper() == "HEADER":
+                await injector.inject_header(url, param, injected[param])
+            else:
+                await injector.inject_get(url, param, injected[param])
+            resp = await injector.get(second_url)
+        elif method.upper() == "POST":
+            if json_body:
+                resp = await injector.post(url, json_body=injected)
+            else:
+                resp = await injector.post(url, data=injected)
+        elif method.upper() == "PATH":
+            resp = await injector.inject_path(url, path_index, injected[param])
+        elif method.upper() == "COOKIE":
+            resp = await injector.inject_cookie(url, param, injected[param])
+        elif method.upper() == "HEADER":
+            resp = await injector.inject_header(url, param, injected[param])
+        else:
+            resp = await injector.inject_get(url, param, injected[param])
+
+        if hasattr(resp, "status_code") and resp.status_code in (429, 503):
+            logger.debug(
+                "HTTP %d on %s param=%s — treating as baseline noise",
+                resp.status_code, url, param,
+            )
+            return None
+
+        status_prefix = ""
+        if hasattr(resp, "status_code"):
+            status_prefix = f"__HTTP_STATUS_{resp.status_code}__\n"
+        return status_prefix + resp.text
+    except Exception as exc:
+        logger.debug("Request error for %s param=%s: %s", url, param, exc)
+        return None

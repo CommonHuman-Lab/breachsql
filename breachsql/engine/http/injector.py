@@ -2,9 +2,12 @@
 # Copyright (c) 2026 CommonHuman-Lab
 """BreachSQL — engine/http/injector.py"""
 
-from commonhuman_core.http import HttpClient, parse_cookie_string, parse_post_data
+from commonhuman_core.http import HttpClient, AsyncHttpClient, parse_cookie_string, parse_post_data
 
-# Alias: Injector IS HttpClient — no subclass needed, all methods already present.
+# Synchronous alias (legacy / test compatibility)
 Injector = HttpClient
 
-__all__ = ["Injector", "HttpClient", "parse_cookie_string", "parse_post_data"]
+# Async alias — used by the scan engine post-migration
+AsyncInjector = AsyncHttpClient
+
+__all__ = ["Injector", "AsyncInjector", "HttpClient", "AsyncHttpClient", "parse_cookie_string", "parse_post_data"]

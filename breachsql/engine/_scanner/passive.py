@@ -9,19 +9,16 @@ from __future__ import annotations
 
 from typing import Optional
 
-import requests
-
 from ..log import get_logger
-from ..http.injector import Injector
 from ..reporter import ScanResult
 
 logger = get_logger("breachsql.passive")
 
 
-def fetch_seed(injector: Injector, url: str) -> Optional[requests.Response]:
+async def fetch_seed(injector, url: str):
     """Fetch the target URL once for passive checks and DOM source."""
     try:
-        resp = injector.get(url)
+        resp = await injector.get(url)
         logger.debug("Seed fetch %s → %d (%d bytes)", url, resp.status_code, len(resp.text))
         return resp
     except Exception as exc:
@@ -31,8 +28,8 @@ def fetch_seed(injector: Injector, url: str) -> Optional[requests.Response]:
 
 def run_passive_checks(
     url: str,
-    seed_resp: Optional[requests.Response],
-    injector: Injector,
+    seed_resp,
+    injector,
     result: ScanResult,
 ) -> None:
     """
