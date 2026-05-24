@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, AsyncMock
 
 import pytest
 
@@ -22,21 +22,21 @@ def _mock_injector(response_text="<html>OK</html>"):
     r = MagicMock()
     r.text = response_text
     r.status_code = 200
-    inj.inject_get.return_value = r
-    inj.post.return_value = r
+    inj.inject_get = AsyncMock(return_value=r)
+    inj.post = AsyncMock(return_value=r)
     return inj
 
 
 class TestRunStacked:
-    def test_no_finding_when_response_unchanged(self):
+    async def test_no_finding_when_response_unchanged(self):
         """Identical baseline and payload responses must not produce a finding."""
         injector = _mock_injector("<html>Same response</html>")
         opts = ScanOptions(technique="S", dbms="mssql")
         result = ScanResult(target="https://x.com/")
-        run_stacked(_surface(), ["none"], opts, injector, result)
+        await run_stacked(_surface(), ["none"], opts, injector, result)
         assert len(result.stacked) == 0
 
-    def test_finding_when_response_differs(self):
+    async def test_finding_when_response_differs(self):
         """A meaningful response divergence should produce a StackedFinding."""
         call_count = [0]
 
@@ -51,24 +51,24 @@ class TestRunStacked:
             return r
 
         injector = MagicMock()
-        injector.inject_get.side_effect = _side_effect
+        injector.inject_get = AsyncMock(side_effect=_side_effect)
 
         opts = ScanOptions(technique="S", dbms="mssql")
         result = ScanResult(target="https://x.com/")
-        run_stacked(_surface(), ["none"], opts, injector, result)
+        await run_stacked(_surface(), ["none"], opts, injector, result)
         assert len(result.stacked) == 1
         assert result.stacked[0].parameter == "id"
 
-    def test_oracle_skipped(self):
+    async def test_oracle_skipped(self):
         """Oracle does not support stacked queries — no requests should be made."""
         injector = _mock_injector()
         opts = ScanOptions(technique="S", dbms="oracle")
         result = ScanResult(target="https://x.com/")
-        run_stacked(_surface(), ["none"], opts, injector, result)
+        await run_stacked(_surface(), ["none"], opts, injector, result)
         assert len(result.stacked) == 0
         injector.inject_get.assert_not_called()
 
-    def test_db_error_response_not_flagged(self):
+    async def test_db_error_response_not_flagged(self):
         """A stacked payload that triggers a DB error should not produce a finding."""
         call_count = [0]
 
@@ -83,14 +83,14 @@ class TestRunStacked:
             return r
 
         injector = MagicMock()
-        injector.inject_get.side_effect = _side_effect
+        injector.inject_get = AsyncMock(side_effect=_side_effect)
 
         opts = ScanOptions(technique="S", dbms="mysql")
         result = ScanResult(target="https://x.com/")
-        run_stacked(_surface(), ["none"], opts, injector, result)
+        await run_stacked(_surface(), ["none"], opts, injector, result)
         assert len(result.stacked) == 0
 
-    def test_dbms_propagated_on_finding(self):
+    async def test_dbms_propagated_on_finding(self):
         """Detected DBMS should be stored in result.dbms_detected on first finding."""
         call_count = [0]
 
@@ -103,20 +103,20 @@ class TestRunStacked:
             return r
 
         injector = MagicMock()
-        injector.inject_get.side_effect = _side_effect
+        injector.inject_get = AsyncMock(side_effect=_side_effect)
 
         opts = ScanOptions(technique="S", dbms="postgres")
         result = ScanResult(target="https://x.com/")
-        run_stacked(_surface(), ["none"], opts, injector, result)
+        await run_stacked(_surface(), ["none"], opts, injector, result)
 
         if result.stacked:
             assert result.dbms_detected == "postgres"
 
-    def test_timing_payload_detected_via_delay(self):
+    async def test_timing_payload_detected_via_delay(self):
         """A SLEEP-based stacked payload must be confirmed via timing, not content diff."""
         from unittest.mock import patch
 
-        with patch("breachsql.engine._scanner.stacked._timed_fetch") as mock_tf:
+        with patch("breachsql.engine._scanner.stacked._async_timed_fetch") as mock_tf:
             # Both confirmation requests exceed the threshold
             mock_tf.side_effect = [5.0, 5.0]
 
@@ -125,21 +125,21 @@ class TestRunStacked:
             injector = MagicMock()
             r = MagicMock()
             r.text = "<html>OK</html>"
-            injector.inject_get.return_value = r
+            injector.inject_get = AsyncMock(return_value=r)
 
             # Patch payloads to return only a SLEEP payload
             with patch("breachsql.engine._scanner.stacked.get_stacked_payloads",
                        return_value=["'; SELECT SLEEP(1)-- -"]):
-                run_stacked(_surface(), ["none"], opts, injector, result)
+                await run_stacked(_surface(), ["none"], opts, injector, result)
 
         assert len(result.stacked) == 1
         assert result.stacked[0].parameter == "id"
 
-    def test_timing_payload_not_confirmed_if_second_fast(self):
+    async def test_timing_payload_not_confirmed_if_second_fast(self):
         """If the confirmation request is fast, the timing finding must be rejected."""
         from unittest.mock import patch
 
-        with patch("breachsql.engine._scanner.stacked._timed_fetch") as mock_tf:
+        with patch("breachsql.engine._scanner.stacked._async_timed_fetch") as mock_tf:
             # First request slow, second (confirmation) fast
             mock_tf.side_effect = [5.0, 0.1]
 
@@ -148,10 +148,10 @@ class TestRunStacked:
             injector = MagicMock()
             r = MagicMock()
             r.text = "<html>OK</html>"
-            injector.inject_get.return_value = r
+            injector.inject_get = AsyncMock(return_value=r)
 
             with patch("breachsql.engine._scanner.stacked.get_stacked_payloads",
                        return_value=["'; SELECT SLEEP(1)-- -"]):
-                run_stacked(_surface(), ["none"], opts, injector, result)
+                await run_stacked(_surface(), ["none"], opts, injector, result)
 
         assert len(result.stacked) == 0

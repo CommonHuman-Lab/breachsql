@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
 
@@ -50,8 +50,9 @@ def _mock_injector(responses: dict[str, str] | None = None):
         text = responses.get(key_full) or responses.get(key_payload, "<html>OK</html>")
         return _get_resp(text)
 
-    injector.inject_get.side_effect = _inject_get
-    injector.post.side_effect = _post
+    injector.inject_get = AsyncMock(side_effect=_inject_get)
+    injector.post = AsyncMock(side_effect=_post)
+    injector.get = AsyncMock(return_value=_get_resp("<html>OK</html>"))
     injector.get_params.return_value = ["q"]
     injector.request_count = 0
     return injector
@@ -309,39 +310,39 @@ class TestFindColumnCount:
                 r.text = "<html><p>normal content here</p><p>result row</p></html>"
             return r
 
-        injector.inject_get.side_effect = _inject_get
-        injector.post.side_effect = lambda url, data=None: _inject_get(url, "", "")
+        injector.inject_get = AsyncMock(side_effect=_inject_get)
+        injector.post = AsyncMock(side_effect=lambda url, data=None: _inject_get(url, "", ""))
         return injector
 
-    def test_detects_column_count(self):
+    async def test_detects_column_count(self):
         injector = self._make_injector_for_order_by(break_at=3)
-        col_count = _find_column_count(
+        col_count = await _find_column_count(
             url="https://x.com/?id=1", method="GET",
             params={"id": "1"}, param="id",
             evasion="none", injector=injector,
         )
         assert col_count == 2
 
-    def test_returns_none_when_all_fail(self):
+    async def test_returns_none_when_all_fail(self):
         """If all ORDER BY probes return None (network error), returns None."""
         injector = MagicMock()
-        injector.inject_get.side_effect = Exception("network error")
-        col_count = _find_column_count(
+        injector.inject_get = AsyncMock(side_effect=Exception("network error"))
+        col_count = await _find_column_count(
             url="https://x.com/?id=1", method="GET",
             params={"id": "1"}, param="id",
             evasion="none", injector=injector,
         )
         assert col_count is None
 
-    def test_respects_max_cols_parameter(self):
+    async def test_respects_max_cols_parameter(self):
         """max_cols parameter should cap the number of probes."""
         injector = MagicMock()
         r = MagicMock()
         r.text = "<html><p>normal content here</p></html>"
         r.status_code = 200
-        injector.inject_get.return_value = r
+        injector.inject_get = AsyncMock(return_value=r)
 
-        col_count = _find_column_count(
+        col_count = await _find_column_count(
             url="https://x.com/?id=1", method="GET",
             params={"id": "1"}, param="id",
             evasion="none", injector=injector,
@@ -352,7 +353,7 @@ class TestFindColumnCount:
 
 
 class TestTestParam:
-    def test_error_based_detection(self):
+    async def test_error_based_detection(self):
         """Should detect MySQL error in response and append an ErrorBasedFinding."""
         mysql_error = "You have an error in your SQL syntax near '1'"
         # The scanner appends payload to original value "1", so injected value is "1'"
@@ -360,12 +361,12 @@ class TestTestParam:
         opts = ScanOptions(technique="E", dbms="mysql", level=1)
         result = ScanResult(target="https://x.com/")
 
-        scan_param(_surface(), ["none"], opts, injector, result)
+        await scan_param(_surface(), ["none"], opts, injector, result)
 
         assert len(result.error_based) == 1
         assert result.error_based[0].dbms == "mysql"
 
-    def test_boolean_detection(self):
+    async def test_boolean_detection(self):
         """Should detect boolean SQLi when true/false responses diverge."""
         injector = _mock_injector({
             # Full appended values (original "1" + payload)
@@ -380,22 +381,22 @@ class TestTestParam:
         opts = ScanOptions(technique="B", level=1)
         result = ScanResult(target="https://x.com/")
 
-        scan_param(_surface(), ["none"], opts, injector, result)
+        await scan_param(_surface(), ["none"], opts, injector, result)
 
         assert len(result.boolean_based) == 1
 
-    def test_baseline_failure_exits_early(self):
+    async def test_baseline_failure_exits_early(self):
         """If the baseline fetch fails (returns None), scan_param should exit silently."""
         injector = MagicMock()
-        injector.inject_get.side_effect = Exception("connection refused")
-        injector.post.side_effect = Exception("connection refused")
+        injector.inject_get = AsyncMock(side_effect=Exception("connection refused"))
+        injector.post = AsyncMock(side_effect=Exception("connection refused"))
 
         opts = ScanOptions(technique="EB", level=1)
         result = ScanResult(target="https://x.com/")
-        scan_param(_surface(), ["none"], opts, injector, result)
+        await scan_param(_surface(), ["none"], opts, injector, result)
         assert result.total_findings == 0
 
-    def test_post_method_surface(self):
+    async def test_post_method_surface(self):
         """POST-method surface should use injector.post for payload delivery."""
         mysql_error = "You have an error in your SQL syntax"
         injector = MagicMock()
@@ -407,71 +408,71 @@ class TestTestParam:
             r.status_code = 200
             return r
 
-        injector.post.side_effect = _post
+        injector.post = AsyncMock(side_effect=_post)
         injector.get_params.return_value = ["id"]
 
         opts = ScanOptions(technique="E", level=1)
         result = ScanResult(target="https://x.com/")
         surface = {"url": "https://x.com/", "method": "POST",
                    "params": {"id": "1"}, "single_param": "id"}
-        scan_param(surface, ["none"], opts, injector, result)
+        await scan_param(surface, ["none"], opts, injector, result)
 
         assert len(result.error_based) >= 1
 
-    def test_no_finding_clean_response(self):
+    async def test_no_finding_clean_response(self):
         """No findings if responses are all identical (no SQLi)."""
         injector = _mock_injector()
         opts = ScanOptions(technique="EB", level=1)
         result = ScanResult(target="https://x.com/")
 
-        scan_param(_surface(), ["none"], opts, injector, result)
+        await scan_param(_surface(), ["none"], opts, injector, result)
 
         assert result.total_findings == 0
 
-    def test_technique_e_only_runs_error(self):
+    async def test_technique_e_only_runs_error(self):
         """With technique='E', boolean tests should not run."""
         injector = _mock_injector()
         opts = ScanOptions(technique="E", level=1)
         result = ScanResult(target="https://x.com/")
 
         with patch("breachsql.engine._scanner.active._test_boolean") as mock_bool:
-            scan_param(_surface(), ["none"], opts, injector, result)
+            await scan_param(_surface(), ["none"], opts, injector, result)
             mock_bool.assert_not_called()
 
-    def test_union_runs_at_level1(self):
+    async def test_union_runs_at_level1(self):
         """Union detection should run at level=1 (no longer gated by level)."""
         injector = _mock_injector()
         opts = ScanOptions(technique="U", level=1)
         result = ScanResult(target="https://x.com/")
 
         with patch("breachsql.engine._scanner.active._test_union") as mock_union:
-            scan_param(_surface(), ["none"], opts, injector, result)
+            await scan_param(_surface(), ["none"], opts, injector, result)
             mock_union.assert_called_once()
 
-    def test_union_runs_at_level2(self):
+    async def test_union_runs_at_level2(self):
         """Union detection should run at level=2."""
         injector = _mock_injector()
         opts = ScanOptions(technique="U", level=2)
         result = ScanResult(target="https://x.com/")
 
         with patch("breachsql.engine._scanner.active._test_union") as mock_union:
-            scan_param(_surface(), ["none"], opts, injector, result)
+            await scan_param(_surface(), ["none"], opts, injector, result)
             mock_union.assert_called_once()
 
-    def test_second_url_passed_through(self):
+    async def test_second_url_passed_through(self):
         """second_url in opts should be forwarded to _test_error_based."""
         injector = _mock_injector()
         opts = ScanOptions(technique="E", level=1, second_url="https://x.com/result")
         result = ScanResult(target="https://x.com/")
 
         with patch("breachsql.engine._scanner.active._test_error_based") as mock_err:
-            scan_param(_surface(), ["none"], opts, injector, result)
+            await scan_param(_surface(), ["none"], opts, injector, result)
             # second_url should be in the call arguments
             _, kwargs = mock_err.call_args if mock_err.call_args else ((), {})
             args = mock_err.call_args[0] if mock_err.call_args else ()
             assert "https://x.com/result" in args
 
-    def test_union_not_detected_when_marker_only_in_error(self):
+    async def test_union_not_detected_when_marker_only_in_error(self):
         """Union should NOT be reported when the marker only appears inside a
         DB error message (escaped payload reflected back in error text) rather
         than in actual extracted UNION data — regression test for the
@@ -516,7 +517,7 @@ class TestTestParam:
             return r
 
         injector = MagicMock()
-        injector.inject_get.side_effect = _inject_get
+        injector.inject_get = AsyncMock(side_effect=_inject_get)
 
         opts = ScanOptions(technique="U", level=2, dbms="mysql")
         result = ScanResult(target="https://x.com/")
@@ -528,7 +529,7 @@ class TestTestParam:
         }
 
         with patch.object(_active, "make_marker", side_effect=_capture_marker):
-            _test_union(
+            await _test_union(
                 surface["url"], surface["method"], surface["params"],
                 surface["single_param"], "none", opts, injector, result,
             )
@@ -571,36 +572,36 @@ class TestParenEscapeContext:
             return r
 
         inj = MagicMock()
-        inj.inject_get.side_effect = _inject_get
+        inj.inject_get = AsyncMock(side_effect=_inject_get)
         inj.get_params.return_value = ["q"]
         inj.request_count = 0
         return inj
 
-    def test_error_based_paren_context(self):
+    async def test_error_based_paren_context(self):
         from breachsql.engine._scanner.active import _test_error_based
         inj = self._make_paren_injector("MARKER")
         opts = ScanOptions(technique="E", dbms="sqlite")
         result = ScanResult(target="https://x.com/")
-        _test_error_based(
+        await _test_error_based(
             "https://x.com/?q=foo", "GET", {"q": "foo"}, "q",
             "none", opts, inj, result,
         )
         assert len(result.error_based) >= 1
         assert result.error_based[0].dbms in ("sqlite", "generic")
 
-    def test_boolean_paren_context(self):
+    async def test_boolean_paren_context(self):
         from breachsql.engine._scanner.active import _test_boolean
         inj = self._make_paren_injector("MARKER")
         opts = ScanOptions(technique="B")
         result = ScanResult(target="https://x.com/")
         baseline = "<html><body>Product: Foo</body></html>"
-        _test_boolean(
+        await _test_boolean(
             "https://x.com/?q=foo", "GET", {"q": "foo"}, "q",
             baseline, "none", opts, inj, result,
         )
         assert len(result.boolean_based) >= 1
 
-    def test_union_paren_context(self):
+    async def test_union_paren_context(self):
         from breachsql.engine._scanner.active import _test_union
         import breachsql.engine._scanner.active as _active
 
@@ -634,12 +635,12 @@ class TestParenEscapeContext:
             return r
 
         inj = MagicMock()
-        inj.inject_get.side_effect = _inject_get
+        inj.inject_get = AsyncMock(side_effect=_inject_get)
         opts = ScanOptions(technique="U", level=2, dbms="sqlite")
         result = ScanResult(target="https://x.com/")
 
         with patch.object(_active, "make_marker", side_effect=_cap):
-            _test_union(
+            await _test_union(
                 "https://x.com/?q=foo", "GET", {"q": "foo"}, "q",
                 "none", opts, inj, result,
             )
@@ -679,7 +680,7 @@ class TestJsonPostBody:
         # data= should NOT be set (or be None)
         assert call_kwargs.kwargs.get("data") is None
 
-    def test_scan_param_json_surface(self):
+    async def test_scan_param_json_surface(self):
         """scan_param with json_body=True surface detects error-based SQLi via JSON POST."""
         error_html = "<html>SQLITE_ERROR: near \"'\" syntax error</html>"
         ok_html = "<html>OK logged in</html>"
@@ -693,7 +694,7 @@ class TestJsonPostBody:
             r.text = error_html if "'" in val else ok_html
             return r
 
-        inj.post.side_effect = _post
+        inj.post = AsyncMock(side_effect=_post)
 
         opts = ScanOptions(technique="E", dbms="sqlite")
         result = ScanResult(target="https://x.com/")
@@ -704,7 +705,7 @@ class TestJsonPostBody:
             "single_param": "email",
             "json_body": True,
         }
-        scan_param(surface, ["none"], opts, inj, result)
+        await scan_param(surface, ["none"], opts, inj, result)
         assert len(result.error_based) >= 1
 
 
@@ -726,12 +727,12 @@ class TestPathInjection:
                 r.text = good_text
             return r
 
-        inj.inject_path.side_effect = _inject_path
+        inj.inject_path = MagicMock(side_effect=_inject_path)
         # Baseline inject_get shouldn't be called for PATH surfaces, but mock anyway
         r_ok = MagicMock()
         r_ok.text = good_text
         r_ok.status_code = 200
-        inj.inject_get.return_value = r_ok
+        inj.inject_get = AsyncMock(return_value=r_ok)
         return inj
 
     def test_fetch_path_calls_inject_path(self):
@@ -761,10 +762,8 @@ class TestPathInjection:
         # Third arg is the injected value — should equal original "42" unchanged
         assert call_args[0][2] == "42"
 
-    def test_scan_param_path_surface_detects_error(self):
+    async def test_scan_param_path_surface_detects_error(self):
         """scan_param with method=PATH surface detects error-based SQLi."""
-        import json as _json
-
         error_html = "<html>You have an error in your SQL syntax</html>"
         ok_html    = "<html>Order found</html>"
 
@@ -774,7 +773,7 @@ class TestPathInjection:
             r.status_code = 200
             r.text = error_html if "'" in str(value) else ok_html
             return r
-        inj.inject_path.side_effect = _inject_path
+        inj.inject_path = AsyncMock(side_effect=_inject_path)
 
         opts    = ScanOptions(technique="E", dbms="mysql")
         result  = ScanResult(target="https://x.com/")
@@ -785,6 +784,6 @@ class TestPathInjection:
             "single_param": "id",
             "path_index":   3,
         }
-        scan_param(surface, ["none"], opts, inj, result)
+        await scan_param(surface, ["none"], opts, inj, result)
         assert len(result.error_based) >= 1
         assert result.error_based[0].method == "PATH"
