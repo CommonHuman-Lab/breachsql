@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, AsyncMock, patch
 import time
 
 import pytest
@@ -35,8 +35,8 @@ def _mock_injector_with_delay(delay: float = 0.0):
         r.status_code = 200
         return r
 
-    injector.inject_get.side_effect = _inject_get
-    injector.post.side_effect = lambda url, data=None: _inject_get(url, "", "")
+    injector.inject_get = AsyncMock(side_effect=_inject_get)
+    injector.post = AsyncMock(side_effect=lambda url, data=None: _inject_get(url, "", ""))
     return injector
 
 
@@ -62,23 +62,22 @@ class TestInferDbms:
 
 
 class TestMeasureBaseline:
-    def test_returns_min_of_two_samples(self):
+    async def test_returns_min_of_two_samples(self):
         """Baseline time should be the minimum of two clean request times."""
         injector = _mock_injector_with_delay(0.0)
-        t = _measure_baseline(injector, "https://x.com/?id=1", "GET", {"id": "1"}, "id")
+        t = await _measure_baseline(injector, "https://x.com/?id=1", "GET", {"id": "1"}, "id")
         assert t is not None
         assert t >= 0.0
 
-    def test_returns_none_if_all_fail(self):
+    async def test_returns_none_if_all_fail(self):
         """If all baseline requests fail, returns None."""
         injector = MagicMock()
-        injector.inject_get.side_effect = Exception("network error")
-        t = _measure_baseline(injector, "https://x.com/?id=1", "GET", {"id": "1"}, "id")
+        injector.inject_get = AsyncMock(side_effect=Exception("network error"))
+        t = await _measure_baseline(injector, "https://x.com/?id=1", "GET", {"id": "1"}, "id")
         assert t is None
 
-    def test_baseline_does_not_append_literal_one(self):
+    async def test_baseline_does_not_append_literal_one(self):
         """Baseline must send the original param value unchanged, not append '1'."""
-        from breachsql.engine._scanner.blind import _timed_fetch_clean
         seen_values: list = []
 
         injector = MagicMock()
@@ -90,115 +89,117 @@ class TestMeasureBaseline:
             r.status_code = 200
             return r
 
-        injector.inject_get.side_effect = _capture
-        _measure_baseline(injector, "https://x.com/?id=1", "GET", {"id": "1"}, "id")
+        injector.inject_get = AsyncMock(side_effect=_capture)
+        await _measure_baseline(injector, "https://x.com/?id=1", "GET", {"id": "1"}, "id")
         # The original param value for GET is extracted from the URL querystring — "1"
         # It must NOT be "11" (original "1" + appended "1")
         assert all(v == "1" for v in seen_values), f"Unexpected values injected: {seen_values}"
 
 
 class TestTestTimeBased:
-    def test_no_finding_fast_response(self):
+    async def test_no_finding_fast_response(self):
         """Fast responses should not produce time-based findings."""
         injector = _mock_injector_with_delay(0.0)
         opts = ScanOptions(technique="T", time_threshold=4, dbms="mysql")
         result = ScanResult(target="https://x.com/")
-        run_time_based(_surface(), ["none"], opts, injector, result)
+        await run_time_based(_surface(), ["none"], opts, injector, result)
         assert len(result.time_based) == 0
 
-    def test_slow_response_produces_finding(self):
+    async def test_slow_response_produces_finding(self):
         """Responses exceeding the threshold should produce a TimeFinding."""
-        # Mock _timed_fetch to return a long delay without actually sleeping
-        with patch("breachsql.engine._scanner.blind._timed_fetch") as mock_tf:
-            # baseline = 0.01s, payload = 5.0s, confirmation = 5.0s
-            mock_tf.side_effect = [0.01, 0.01, 5.0, 5.0]
+        with patch("breachsql.engine._scanner.blind._measure_baseline", return_value=0.01):
+            with patch("breachsql.engine._scanner.blind._async_timed_fetch") as mock_tf:
+                # payload = 5.0s, confirmation = 5.0s
+                mock_tf.side_effect = [5.0, 5.0]
 
-            opts = ScanOptions(technique="T", time_threshold=4, dbms="mysql")
-            result = ScanResult(target="https://x.com/")
-            run_time_based(_surface(), ["none"], opts, result=result,
-                           injector=MagicMock())
+                opts = ScanOptions(technique="T", time_threshold=4, dbms="mysql")
+                result = ScanResult(target="https://x.com/")
+                await run_time_based(_surface(), ["none"], opts, result=result,
+                               injector=MagicMock())
 
-            assert len(result.time_based) == 1
-            assert result.time_based[0].observed_delay >= 4.0
+                assert len(result.time_based) == 1
+                assert result.time_based[0].observed_delay >= 4.0
 
-    def test_dbms_propagated_from_payload(self):
+    async def test_dbms_propagated_from_payload(self):
         """Detected DBMS should be stored in result.dbms_detected."""
-        with patch("breachsql.engine._scanner.blind._timed_fetch") as mock_tf:
-            mock_tf.side_effect = [0.01, 0.01, 5.0, 5.0]
+        with patch("breachsql.engine._scanner.blind._measure_baseline", return_value=0.01):
+            with patch("breachsql.engine._scanner.blind._async_timed_fetch") as mock_tf:
+                mock_tf.side_effect = [5.0, 5.0]
 
-            opts = ScanOptions(technique="T", time_threshold=4, dbms="mysql")
-            result = ScanResult(target="https://x.com/")
-            run_time_based(_surface(), ["none"], opts, result=result,
-                           injector=MagicMock())
+                opts = ScanOptions(technique="T", time_threshold=4, dbms="mysql")
+                result = ScanResult(target="https://x.com/")
+                await run_time_based(_surface(), ["none"], opts, result=result,
+                               injector=MagicMock())
 
-            assert result.dbms_detected == "mysql"
+                assert result.dbms_detected == "mysql"
 
-    def test_second_url_forwarded(self):
-        """second_url in opts must be forwarded to _timed_fetch calls."""
-        with patch("breachsql.engine._scanner.blind._timed_fetch") as mock_tf:
-            mock_tf.return_value = 0.0  # fast, no finding — we just check the calls
+    async def test_second_url_forwarded(self):
+        """second_url in opts must be forwarded to _async_timed_fetch calls."""
+        with patch("breachsql.engine._scanner.blind._measure_baseline", return_value=0.01):
+            with patch("breachsql.engine._scanner.blind._async_timed_fetch") as mock_tf:
+                mock_tf.return_value = 0.0  # fast, no finding — we just check the calls
 
-            opts = ScanOptions(technique="T", time_threshold=4, dbms="mysql",
-                               second_url="https://x.com/result")
-            result = ScanResult(target="https://x.com/")
-            run_time_based(_surface(), ["none"], opts, result=result,
-                           injector=MagicMock())
+                opts = ScanOptions(technique="T", time_threshold=4, dbms="mysql",
+                                   second_url="https://x.com/result")
+                result = ScanResult(target="https://x.com/")
+                await run_time_based(_surface(), ["none"], opts, result=result,
+                               injector=MagicMock())
 
-            # Every _timed_fetch call should have second_url set
-            for c in mock_tf.call_args_list:
-                kwargs = c[1]
-                assert kwargs.get("second_url") == "https://x.com/result"
+                # Every _async_timed_fetch call should have second_url set
+                for c in mock_tf.call_args_list:
+                    kwargs = c[1]
+                    assert kwargs.get("second_url") == "https://x.com/result"
 
-    def test_oob_not_called_without_callback(self):
+    async def test_oob_not_called_without_callback(self):
         """OOB should silently exit if no callback is configured."""
         injector = MagicMock()
         opts = ScanOptions(technique="O", oob_callback="")
         result = ScanResult(target="https://x.com/")
-        run_oob(_surface(), ["none"], opts, injector, result)
+        await run_oob(_surface(), ["none"], opts, injector, result)
         assert len(result.oob) == 0
         injector.inject_get.assert_not_called()
 
 
 class TestTestOob:
-    def test_oob_appends_finding(self):
+    async def test_oob_appends_finding(self):
         """OOB inject should append an OOBFinding even without callback confirmation."""
         injector = MagicMock()
         r = MagicMock()
         r.text = "<html>OK</html>"
-        injector.inject_get.return_value = r
+        injector.inject_get = AsyncMock(return_value=r)
 
         opts = ScanOptions(technique="O", oob_callback="http://cb.example.com", dbms="mssql")
         result = ScanResult(target="https://x.com/")
 
-        run_oob(_surface(), ["none"], opts, injector, result)
+        await run_oob(_surface(), ["none"], opts, injector, result)
 
         assert len(result.oob) == 1
         assert result.oob[0].callback_url == "http://cb.example.com"
 
-    def test_oob_uses_correct_param(self):
+    async def test_oob_uses_correct_param(self):
         injector = MagicMock()
         r = MagicMock()
         r.text = "<html>OK</html>"
-        injector.inject_get.return_value = r
+        injector.inject_get = AsyncMock(return_value=r)
 
         opts = ScanOptions(technique="O", oob_callback="http://cb.io", dbms="mssql")
         result = ScanResult(target="https://x.com/")
         surface = _surface(param="user_id")
 
-        run_oob(surface, ["none"], opts, injector, result)
+        await run_oob(surface, ["none"], opts, injector, result)
 
         assert result.oob[0].parameter == "user_id"
 
-    def test_oob_finding_confirmed_is_false(self):
+    async def test_oob_finding_confirmed_is_false(self):
         """OOB findings must always have confirmed=False (callback not verified in-band)."""
         injector = MagicMock()
         r = MagicMock()
         r.text = "<html>OK</html>"
-        injector.inject_get.return_value = r
+        injector.inject_get = AsyncMock(return_value=r)
 
         opts = ScanOptions(technique="O", oob_callback="http://cb.example.com", dbms="mssql")
         result = ScanResult(target="https://x.com/")
-        run_oob(_surface(), ["none"], opts, injector, result)
+        await run_oob(_surface(), ["none"], opts, injector, result)
 
         assert len(result.oob) == 1
         assert result.oob[0].confirmed is False
@@ -209,6 +210,6 @@ class TestTestOob:
         result = ScanResult(target="https://x.com/")
         result.dbms_detected = "sqlite"
 
-        run_oob(_surface(), ["none"], opts, injector, result)
+        await run_oob(_surface(), ["none"], opts, injector, result)
         # No payloads → no finding
         assert len(result.oob) == 0

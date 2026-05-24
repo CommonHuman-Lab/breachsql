@@ -19,7 +19,7 @@ def _surface(url="https://x.com/?id=1", method="GET", param="id"):
 
 
 class TestExtractValue:
-    def test_extracts_known_string_boolean(self):
+    async def test_extracts_known_string_boolean(self):
         """Boolean extraction must recover a known string via OR-based single probe."""
         target = "abc"
         _baseline = "<html>not-found</html>"
@@ -36,9 +36,9 @@ class TestExtractValue:
             # OR fires → all rows returned (differs from baseline) when condition true
             return _found if actual_ord > threshold else _baseline
 
-        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_fetch_side):
+        with patch("breachsql.engine._scanner.extract._async_fetch", side_effect=_fetch_side):
             opts = ScanOptions(dbms="mysql")
-            extracted = extract_value(
+            extracted = await extract_value(
                 expr="SELECT 'abc'",
                 surface=_surface(),
                 evasions=["none"],
@@ -49,7 +49,7 @@ class TestExtractValue:
             )
         assert extracted == "abc"
 
-    def test_boolean_payloads_use_or_prefix(self):
+    async def test_boolean_payloads_use_or_prefix(self):
         """All boolean extraction probes must use OR injection, not AND."""
         seen = []
 
@@ -59,9 +59,9 @@ class TestExtractValue:
                 seen.append(value)
             return "<html>not-found</html>"
 
-        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_capture):
+        with patch("breachsql.engine._scanner.extract._async_fetch", side_effect=_capture):
             opts = ScanOptions(dbms="mysql")
-            extract_value(
+            await extract_value(
                 expr="VERSION()",
                 surface=_surface(),
                 evasions=["none"],
@@ -76,7 +76,7 @@ class TestExtractValue:
             assert "' OR " in payload, f"Expected OR injection, got: {payload!r}"
             assert "' AND " not in payload, f"Unexpected AND injection: {payload!r}"
 
-    def test_end_of_string_stops_extraction(self):
+    async def test_end_of_string_stops_extraction(self):
         """Extraction must stop at end-of-string (ASCII 0) without appending junk."""
         target = "hi"
         _baseline = "empty"
@@ -92,8 +92,8 @@ class TestExtractValue:
             actual_ord = ord(target[pos - 1]) if pos <= len(target) else 0
             return _found if actual_ord > threshold else _baseline
 
-        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_fetch_side):
-            result = extract_value(
+        with patch("breachsql.engine._scanner.extract._async_fetch", side_effect=_fetch_side):
+            result = await extract_value(
                 expr="SELECT 'hi'",
                 surface=_surface(),
                 evasions=["none"],
@@ -105,15 +105,15 @@ class TestExtractValue:
 
         assert result == "hi", f"Expected 'hi', got {result!r}"
 
-    def test_returns_empty_when_no_signal(self):
+    async def test_returns_empty_when_no_signal(self):
         """When both responses are identical (no boolean channel), return empty string."""
         def _no_signal(injector, url, method, params, param, value,
                        second_url="", json_body=False, path_index=0):
             return "<html>same</html>"
 
-        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_no_signal):
+        with patch("breachsql.engine._scanner.extract._async_fetch", side_effect=_no_signal):
             opts = ScanOptions(dbms="mysql")
-            extracted = extract_value(
+            extracted = await extract_value(
                 expr="NULL",
                 surface=_surface(),
                 evasions=["none"],
@@ -124,7 +124,7 @@ class TestExtractValue:
             )
         assert extracted == ""
 
-    def test_sqlite_uses_substr(self):
+    async def test_sqlite_uses_substr(self):
         """SQLite extraction payloads must use SUBSTR, not SUBSTRING."""
         seen_payloads = []
 
@@ -134,9 +134,9 @@ class TestExtractValue:
                 seen_payloads.append(value)
             return "<html>false</html>"
 
-        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_capture):
+        with patch("breachsql.engine._scanner.extract._async_fetch", side_effect=_capture):
             opts = ScanOptions(dbms="sqlite")
-            extract_value(
+            await extract_value(
                 expr="SELECT 'x'",
                 surface=_surface(),
                 evasions=["none"],
@@ -148,7 +148,7 @@ class TestExtractValue:
 
         assert any("SUBSTR(" in p and "SUBSTRING(" not in p for p in seen_payloads)
 
-    def test_oracle_uses_substr(self):
+    async def test_oracle_uses_substr(self):
         """Oracle extraction payloads must use SUBSTR, not SUBSTRING."""
         seen_payloads = []
 
@@ -158,9 +158,9 @@ class TestExtractValue:
                 seen_payloads.append(value)
             return "<html>false</html>"
 
-        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_capture):
+        with patch("breachsql.engine._scanner.extract._async_fetch", side_effect=_capture):
             opts = ScanOptions(dbms="oracle")
-            extract_value(
+            await extract_value(
                 expr="SELECT 'x' FROM dual",
                 surface=_surface(),
                 evasions=["none"],
@@ -176,8 +176,8 @@ class TestExtractValue:
 class TestTimeBlindPayloads:
     """Verify per-DBMS time-blind extraction payload syntax."""
 
-    def _collect_time_payloads(self, dbms: str) -> list:
-        """Run extract_value in time mode and collect all _timed_fetch payloads."""
+    async def _collect_time_payloads(self, dbms: str) -> list:
+        """Run extract_value in time mode and collect all _async_timed_fetch payloads."""
         seen = []
 
         def _timed(injector, url, method, params, param, value,
@@ -185,9 +185,9 @@ class TestTimeBlindPayloads:
             seen.append(value)
             return 0.0  # always fast → extraction terminates quickly
 
-        with patch("breachsql.engine._scanner.extract._timed_fetch", side_effect=_timed):
+        with patch("breachsql.engine._scanner.extract._async_timed_fetch", side_effect=_timed):
             opts = ScanOptions(dbms=dbms, time_threshold=4)
-            extract_value(
+            await extract_value(
                 expr="VERSION()",
                 surface=_surface(),
                 evasions=["none"],
@@ -198,21 +198,21 @@ class TestTimeBlindPayloads:
             )
         return seen
 
-    def test_mysql_uses_if_sleep(self):
-        payloads = self._collect_time_payloads("mysql")
+    async def test_mysql_uses_if_sleep(self):
+        payloads = await self._collect_time_payloads("mysql")
         assert any("IF(" in p and "SLEEP(" in p for p in payloads)
 
-    def test_postgres_uses_pg_sleep(self):
-        payloads = self._collect_time_payloads("postgres")
+    async def test_postgres_uses_pg_sleep(self):
+        payloads = await self._collect_time_payloads("postgres")
         assert any("pg_sleep(" in p for p in payloads)
 
-    def test_sqlite_uses_randomblob(self):
-        payloads = self._collect_time_payloads("sqlite")
+    async def test_sqlite_uses_randomblob(self):
+        payloads = await self._collect_time_payloads("sqlite")
         assert any("randomblob(" in p.lower() or "WITH RECURSIVE" in p for p in payloads)
 
-    def test_mssql_uses_stacked_waitfor(self):
+    async def test_mssql_uses_stacked_waitfor(self):
         """MSSQL time-blind must use stacked IF ... WAITFOR DELAY, not a SELECT subquery."""
-        payloads = self._collect_time_payloads("mssql")
+        payloads = await self._collect_time_payloads("mssql")
         for p in payloads:
             # Must be stacked (starts with ';') and use IF + WAITFOR
             assert "SELECT WAITFOR" not in p, (
@@ -241,10 +241,10 @@ def _surface(url="https://x.com/search", param="q"):
 
 
 class TestExtractViaUnion:
-    def _run(self, dbms, resp_text, payload=None):
+    async def _run(self, dbms, resp_text, payload=None):
         finding = _union_finding(payload or "')) UNION SELECT 'BreachSQL_marker',2-- -")
-        with patch("breachsql.engine._scanner.extract._fetch", return_value=resp_text):
-            return extract_via_union(
+        with patch("breachsql.engine._scanner.extract._async_fetch", return_value=resp_text):
+            return await extract_via_union(
                 expr="VERSION()",
                 union_finding=finding,
                 surface=_surface(),
@@ -253,14 +253,14 @@ class TestExtractViaUnion:
                 injector=MagicMock(),
             )
 
-    def test_mysql_uses_concat_function(self):
+    async def test_mysql_uses_concat_function(self):
         seen = []
         finding = _union_finding()
         def _capture(injector, url, method, params, param, value, **kw):
             seen.append(value)
             return ""
-        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_capture):
-            extract_via_union(
+        with patch("breachsql.engine._scanner.extract._async_fetch", side_effect=_capture):
+            await extract_via_union(
                 expr="VERSION()",
                 union_finding=finding,
                 surface=_surface(),
@@ -270,14 +270,14 @@ class TestExtractViaUnion:
             )
         assert any("CONCAT(" in p for p in seen)
 
-    def test_sqlite_uses_pipe_concat(self):
+    async def test_sqlite_uses_pipe_concat(self):
         seen = []
         finding = _union_finding()
         def _capture(injector, url, method, params, param, value, **kw):
             seen.append(value)
             return ""
-        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_capture):
-            extract_via_union(
+        with patch("breachsql.engine._scanner.extract._async_fetch", side_effect=_capture):
+            await extract_via_union(
                 expr="sqlite_version()",
                 union_finding=finding,
                 surface=_surface(),
@@ -287,14 +287,14 @@ class TestExtractViaUnion:
             )
         assert any("||" in p for p in seen)
 
-    def test_postgres_uses_pipe_concat(self):
+    async def test_postgres_uses_pipe_concat(self):
         seen = []
         finding = _union_finding()
         def _capture(injector, url, method, params, param, value, **kw):
             seen.append(value)
             return ""
-        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_capture):
-            extract_via_union(
+        with patch("breachsql.engine._scanner.extract._async_fetch", side_effect=_capture):
+            await extract_via_union(
                 expr="version()",
                 union_finding=finding,
                 surface=_surface(),
@@ -304,14 +304,14 @@ class TestExtractViaUnion:
             )
         assert any("||" in p for p in seen)
 
-    def test_mssql_uses_plus_concat(self):
+    async def test_mssql_uses_plus_concat(self):
         seen = []
         finding = _union_finding()
         def _capture(injector, url, method, params, param, value, **kw):
             seen.append(value)
             return ""
-        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_capture):
-            extract_via_union(
+        with patch("breachsql.engine._scanner.extract._async_fetch", side_effect=_capture):
+            await extract_via_union(
                 expr="@@version",
                 union_finding=finding,
                 surface=_surface(),
@@ -321,27 +321,27 @@ class TestExtractViaUnion:
             )
         assert any("'BSQL_OUT_'+" in p for p in seen)
 
-    def test_extracts_value_between_markers(self):
+    async def test_extracts_value_between_markers(self):
         marker_resp = "...BSQL_OUT_5.7.42_BSQL_END..."
-        result = self._run("mysql", marker_resp)
+        result = await self._run("mysql", marker_resp)
         assert result == "5.7.42"
 
-    def test_returns_empty_when_no_marker_in_response(self):
-        result = self._run("mysql", "<html>no markers here</html>")
+    async def test_returns_empty_when_no_marker_in_response(self):
+        result = await self._run("mysql", "<html>no markers here</html>")
         assert result == ""
 
-    def test_returns_empty_when_fetch_returns_none(self):
-        result = self._run("mysql", None)
+    async def test_returns_empty_when_fetch_returns_none(self):
+        result = await self._run("mysql", None)
         assert result == ""
 
-    def test_returns_empty_when_fetch_returns_empty_string(self):
-        result = self._run("mysql", "")
+    async def test_returns_empty_when_fetch_returns_empty_string(self):
+        result = await self._run("mysql", "")
         assert result == ""
 
-    def test_returns_empty_when_payload_has_no_marker(self):
+    async def test_returns_empty_when_payload_has_no_marker(self):
         finding = _union_finding(payload="')) UNION SELECT 1,2-- -")
-        with patch("breachsql.engine._scanner.extract._fetch", return_value="anything"):
-            result = extract_via_union(
+        with patch("breachsql.engine._scanner.extract._async_fetch", return_value="anything"):
+            result = await extract_via_union(
                 expr="VERSION()",
                 union_finding=finding,
                 surface=_surface(),
@@ -351,14 +351,14 @@ class TestExtractViaUnion:
             )
         assert result == ""
 
-    def test_oracle_uses_pipe_concat(self):
+    async def test_oracle_uses_pipe_concat(self):
         seen = []
         finding = _union_finding()
         def _capture(injector, url, method, params, param, value, **kw):
             seen.append(value)
             return ""
-        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_capture):
-            extract_via_union(
+        with patch("breachsql.engine._scanner.extract._async_fetch", side_effect=_capture):
+            await extract_via_union(
                 expr="banner FROM v$version",
                 union_finding=finding,
                 surface=_surface(),
@@ -368,14 +368,14 @@ class TestExtractViaUnion:
             )
         assert any("||" in p for p in seen)
 
-    def test_auto_dbms_falls_back_to_mysql_concat(self):
+    async def test_auto_dbms_falls_back_to_mysql_concat(self):
         seen = []
         finding = _union_finding()
         def _capture(injector, url, method, params, param, value, **kw):
             seen.append(value)
             return ""
-        with patch("breachsql.engine._scanner.extract._fetch", side_effect=_capture):
-            extract_via_union(
+        with patch("breachsql.engine._scanner.extract._async_fetch", side_effect=_capture):
+            await extract_via_union(
                 expr="VERSION()",
                 union_finding=finding,
                 surface=_surface(),

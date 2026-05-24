@@ -40,6 +40,7 @@ browser = [
 ]
 dev = [
   "pytest>=8.0",
+  "pytest-asyncio>=0.23",
   "pytest-mock>=3.0",
   "mypy>=1.0",
   "ruff>=0.4",
@@ -57,8 +58,9 @@ Issues   = "https://github.com/commonhuman-lab/breachsql/issues"
 packages = ["breachsql"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts   = "-v"
+testpaths    = ["tests"]
+addopts      = "-v"
+asyncio_mode = "auto"
 norecursedirs = ["breachsql", ".venv", "dist"]
 markers = [
   "firerange: end-to-end tests that require the BreachSQL Fire Range (OctoRig lab 7)",
