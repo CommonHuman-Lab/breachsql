@@ -75,6 +75,12 @@ breachsql -u "https://target.com/users?id=1" --exploit
 # Exploits, and save results to a custom output stem
 breachsql -u "https://target.com/users?id=1" --exploit -o results/target
 
+# Stream JSON to stdout (pipeline-friendly)
+breachsql -u "https://target.com/users?id=1" --json | jq .
+
+# Save plain-text summary separately
+breachsql -u "https://target.com/users?id=1" --text summary.txt
+
 # Full multi-technique scan
 breachsql -u "https://target.com/report?id=1" --dbms mysql --technique EBTUS --level 2 --risk 2
 
@@ -147,7 +153,9 @@ for f in result.error_based:
 | `--openapi` | — | OpenAPI/Swagger spec file or URL — imports endpoints to scan |
 | `--browser-crawl` | — | Headless Chromium endpoint discovery (requires selenium) |
 | `--exploit` | — | Exploits and dump every discovered table; auto-creates `<host>/` and writes `<host>.txt`, `<host>.json`, `<host>.html` |
-| `-o` | — | Output stem — writes `<name>.txt`, `<name>.json`, `<name>_dump.json` |
+| `--json` | — | Emit findings as JSON to stdout (suppresses banner) |
+| `-o STEM` | — | Output stem — writes `<stem>.txt`, `<stem>.json`, `<stem>_dump.json` |
+| `--text FILE` | — | Write plain-text summary to FILE |
 | `--report-html` | — | Write a self-contained HTML report to this file |
 
 ---
