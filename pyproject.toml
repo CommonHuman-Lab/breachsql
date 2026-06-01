@@ -38,6 +38,9 @@ dependencies = [
 browser = [
   "commonhuman-core[browser]",
 ]
+gloomproxy = [
+  "gloomproxy-sdk>=0.1.0",
+]
 dev = [
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
@@ -49,6 +52,9 @@ dev = [
 
 [project.scripts]
 breachsql = "breachsql.__main__:main"
+
+[project.entry-points."gloomproxy.scanners"]
+breachsql = "breachsql.integrations.gloomproxy.plugin:BreachSQLPlugin"
 
 [project.urls]
 Homepage = "https://github.com/commonhuman-lab/breachsql"

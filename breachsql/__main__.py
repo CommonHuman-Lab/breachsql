@@ -29,7 +29,7 @@ from breachsql.engine import scan, ScanOptions
 from breachsql.engine.scanner import _unique_stem, _output_stem
 from breachsql.engine.log import get_logger
 from breachsql._cli.args import build_parser, interactive_prompts
-from breachsql._cli.summary import print_summary
+from breachsql._cli.summary import print_summary, format_summary
 from commonhuman_cli.colour import BOLD, CYAN
 from commonhuman_cli.logging import setup_logging
 from commonhuman_cli.entrypoint import (
@@ -232,6 +232,8 @@ def main() -> None:
         else:
             print_summary(result)
 
+    _text_result = all_results[-1] if all_results else None
+
     if not args.json_output and multi:
         # Merge all results into one combined summary
         from .engine.reporter import ScanResult
@@ -255,6 +257,11 @@ def main() -> None:
         combined.target = f"{urls[0]} (+{len(urls)-1} more)" if len(urls) > 1 else urls[0]
         print()
         print_summary(combined)
+        _text_result = combined
+
+    if args.text and _text_result:
+        from commonhuman_cli.output import write_text_output as _write_text
+        _write_text(format_summary(_text_result), args.text)
 
     # ── HTML report ───────────────────────────────────────────────────────────
     _report_html = getattr(args, "report_html", "")
